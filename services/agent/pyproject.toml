@@ -13,6 +13,7 @@ dependencies = [
     "pydantic==2.14.1",
     "python-dotenv==1.2.4",
     "jsonschema==4.26.0",
+    "groq==1.7.0",
 ]
 
 [project.optional-dependencies]
@@ -31,3 +32,6 @@ atlas_agent = ["tools/*/spec.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: hits the real Groq API (needs ATLAS_LIVE_TESTS=1 and GROQ_API_KEY)",
+]
