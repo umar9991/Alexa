@@ -14,6 +14,7 @@ dependencies = [
     "python-dotenv==1.2.4",
     "jsonschema==4.26.0",
     "groq==1.7.0",
+    "google-genai==1.52.0",
 ]
 
 [project.optional-dependencies]
@@ -33,5 +34,5 @@ atlas_agent = ["tools/*/spec.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "live: hits the real Groq API (needs ATLAS_LIVE_TESTS=1 and GROQ_API_KEY)",
+    "live: hits a real LLM API (needs ATLAS_LIVE_TESTS=1 and a provider key)",
 ]

@@ -7,7 +7,14 @@ from pathlib import Path
 from atlas_agent.core.events import ApprovalRequired, ToolResult
 from atlas_agent.core.loop import run_agent
 from atlas_agent.core.policy import Tier, decide
-from atlas_agent.llm.base import AgentTurn, LLMAuthError, LLMRateLimited, ToolCall
+from atlas_agent.llm.base import (
+    AgentTurn,
+    LLMAuthError,
+    LLMRateLimited,
+    LLMUnavailable,
+    ToolCall,
+)
+from atlas_agent.llm.chain import ChainProvider
 from atlas_agent.llm.scripted import ScriptedProvider
 from atlas_agent.tools.context import ToolContext, ToolError
 from tests.conftest import (
@@ -693,4 +700,68 @@ def test_t2_specs_still_require_approval() -> None:
     assert decide(delete.spec, {"path": "a"}).action == "needs_approval"
     assert decide(overwrite.spec, {"path": "a", "content": "b"}).action == "needs_approval"
     assert decide(move.spec, {"source": "a", "destination": "b"}).action == "allow"
+
+
+def test_loop_history_across_providers_hides_provider_state(tmp_path: Path) -> None:
+    class First:
+        def __init__(self) -> None:
+            self.n = 0
+
+        async def step(
+            self, messages: list[dict[str, object]], tools: list[dict[str, object]]
+        ) -> AgentTurn:
+            del messages, tools
+            self.n += 1
+            if self.n == 1:
+                return AgentTurn(
+                    tool_calls=[
+                        ToolCall(
+                            name="demo.echo",
+                            args={"text": "hi"},
+                            call_id="c1",
+                            provider_state={"thought_signature": "secret-sig"},
+                        )
+                    ]
+                )
+            raise LLMUnavailable("primary down")
+
+    class Second:
+        def __init__(self) -> None:
+            self.seen: list[list[dict[str, object]]] = []
+
+        async def step(
+            self, messages: list[dict[str, object]], tools: list[dict[str, object]]
+        ) -> AgentTurn:
+            del tools
+            self.seen.append([dict(item) for item in messages])
+            return AgentTurn(text="from-secondary")
+
+    async def _run() -> None:
+        first = First()
+        second = Second()
+        audit = make_audit(tmp_path)
+        emitter = RecordingEmitter()
+        await run_agent(
+            "hello",
+            provider=ChainProvider([("groq", first), ("gemini", second)], clock=lambda: 0.0),
+            registry=default_registry(),
+            emit=emitter.emit,
+            wait_approval=wait_true,
+            audit=audit,
+            run_id="run-chain",
+            policy_decide=decide,
+        )
+        assert second.seen
+        assistant = next(item for item in second.seen[0] if item.get("role") == "assistant")
+        calls = assistant["tool_calls"]
+        assert isinstance(calls, list)
+        assert calls[0]["provider_state"] == {"thought_signature": "secret-sig"}  # type: ignore[index]
+        blob = _events_blob(emitter) + audit.path.read_text(encoding="utf-8")
+        assert "provider_state" not in blob
+        assert "secret-sig" not in blob
+        finished = emitter.of_type("run_finished")[0]
+        assert finished.status == "done"  # type: ignore[union-attr]
+
+    asyncio.run(_run())
+
 

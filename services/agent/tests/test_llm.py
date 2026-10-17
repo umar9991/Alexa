@@ -15,17 +15,17 @@ from atlas_agent.llm.base import (
     LLMBadRequest,
     LLMRateLimited,
 )
-from atlas_agent.llm.factory import build_provider
+from atlas_agent.llm.chain import ChainProvider
+from atlas_agent.llm.factory import ProviderConfigError, build_provider
+from atlas_agent.llm.gemini import GeminiProvider
 from atlas_agent.llm.groq import (
-    TOOL_CONTENT_LIMIT,
     GroqProvider,
     _translate_groq_error,
-    decode_tool_name,
-    encode_tool_name,
     internal_to_groq_messages,
     parse_groq_message,
     specs_to_groq_tools,
 )
+from atlas_agent.llm.names import TOOL_CONTENT_LIMIT, decode_tool_name, encode_tool_name
 from atlas_agent.llm.retry import with_retry
 from atlas_agent.llm.scripted import ScriptedProvider
 from atlas_agent.tools.registry import ToolRegistryError
@@ -295,6 +295,25 @@ def test_factory_default_scripted_and_lazy_key() -> None:
     async def _run() -> None:
         with pytest.raises(LLMAuthError, match="GROQ_API_KEY"):
             await groq.step([{"role": "user", "content": "hi"}], [])
+
+    asyncio.run(_run())
+
+
+def test_factory_chain_unknown_and_gemini_lazy() -> None:
+    chain = build_provider(
+        _settings(llm_provider="groq,gemini", groq_api_key="", gemini_api_key="")
+    )
+    assert isinstance(chain, ChainProvider)
+    alone = build_provider(_settings(llm_provider="groq"))
+    assert isinstance(alone, GroqProvider)
+    gemini = build_provider(_settings(llm_provider="gemini", gemini_api_key=""))
+    assert isinstance(gemini, GeminiProvider)
+    with pytest.raises(ProviderConfigError, match="unknown"):
+        build_provider(_settings(llm_provider="nope"))
+
+    async def _run() -> None:
+        with pytest.raises(LLMAuthError, match="GEMINI_API_KEY"):
+            await gemini.step([{"role": "user", "content": "hi"}], [])
 
     asyncio.run(_run())
 

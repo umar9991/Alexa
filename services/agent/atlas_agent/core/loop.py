@@ -25,15 +25,12 @@ from atlas_agent.core.events import (
 from atlas_agent.core.policy import Decision, Tier, decide
 from atlas_agent.core.prompts import SYSTEM_PROMPT
 from atlas_agent.llm.base import (
-    LLMAuthError,
-    LLMBadRequest,
     LLMError,
     LLMProvider,
     LLMRateLimited,
-    LLMUnavailable,
     ToolCall,
 )
-from atlas_agent.llm.groq import truncate_tool_content
+from atlas_agent.llm.names import truncate_tool_content
 from atlas_agent.tools.context import ToolContext, ToolError
 from atlas_agent.tools.registry import ToolRegistry, ToolSpec, format_invalid_args
 
@@ -410,13 +407,17 @@ def _with_call_ids(calls: list[ToolCall]) -> list[ToolCall]:
 
 
 def _assistant_record(text: str | None, calls: list[ToolCall]) -> dict[str, object]:
-    return {
-        "role": "assistant",
-        "content": text,
-        "tool_calls": [
-            {"id": call.call_id, "name": call.name, "args": call.args} for call in calls
-        ],
-    }
+    recorded: list[dict[str, object]] = []
+    for call in calls:
+        item: dict[str, object] = {
+            "id": call.call_id,
+            "name": call.name,
+            "args": call.args,
+        }
+        if call.provider_state is not None:
+            item["provider_state"] = call.provider_state
+        recorded.append(item)
+    return {"role": "assistant", "content": text, "tool_calls": recorded}
 
 
 def _llm_failure_summary(exc: LLMError) -> str:
@@ -424,11 +425,8 @@ def _llm_failure_summary(exc: LLMError) -> str:
         if exc.retry_after_s is not None:
             seconds = max(1, int(exc.retry_after_s))
             return f"Groq rate limit reached, try again in about {seconds} seconds"
-        return "Groq rate limit reached, try again later"
-    if isinstance(exc, LLMAuthError):
-        return "GROQ_API_KEY is missing or invalid"
-    if isinstance(exc, LLMBadRequest):
-        return "Groq rejected the request"
-    if isinstance(exc, LLMUnavailable):
-        return "LLM is temporarily unavailable"
+        return str(exc).strip() or "Groq rate limit reached, try again later"
+    text = str(exc).strip()
+    if text:
+        return text
     return "LLM request failed"

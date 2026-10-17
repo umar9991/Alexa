@@ -14,27 +14,16 @@ from atlas_agent.llm.base import (
     LLMUnavailable,
     ToolCall,
 )
+from atlas_agent.llm.names import (
+    decode_tool_name,
+    encode_tool_name,
+    truncate_tool_content,
+)
 from atlas_agent.llm.retry import with_retry
-
-TOOL_CONTENT_LIMIT = 8000
 
 
 class GroqChatClient(Protocol):
     chat: Any
-
-
-def encode_tool_name(name: str) -> str:
-    return name.replace(".", "__")
-
-
-def decode_tool_name(name: str) -> str:
-    return name.replace("__", ".")
-
-
-def truncate_tool_content(content: str) -> str:
-    if len(content) <= TOOL_CONTENT_LIMIT:
-        return content
-    return content[:TOOL_CONTENT_LIMIT] + "\n[truncated]"
 
 
 def specs_to_groq_tools(tools: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -133,11 +122,14 @@ class GroqProvider:
             raise LLMAuthError("GROQ_API_KEY is missing or invalid")
         from groq import AsyncGroq
 
-        self._client = AsyncGroq(
-            api_key=self._settings.groq_api_key,
-            max_retries=0,
-            timeout=self._settings.llm_timeout_s,
-        )
+        kwargs: dict[str, object] = {
+            "api_key": self._settings.groq_api_key,
+            "max_retries": 0,
+            "timeout": self._settings.llm_timeout_s,
+        }
+        if self._settings.groq_base_url:
+            kwargs["base_url"] = self._settings.groq_base_url
+        self._client = AsyncGroq(**kwargs)
         return self._client
 
 

@@ -47,13 +47,17 @@ python scripts/ws_demo.py "danger delete everything"
 
 ## LLM provider
 
-Copy `.env.example` to `.env`. Default `ATLAS_LLM_PROVIDER=scripted` needs no key. For Groq, set:
+Copy `.env.example` to `.env`. Default `ATLAS_LLM_PROVIDER=scripted` needs no key. Set `ATLAS_LLM_PROVIDER` to one name or a comma-separated chain (`groq`, `gemini`, or `groq,gemini`). Model names come from `GROQ_MODEL` / `GEMINI_MODEL`. Missing keys fail only when a run starts.
 
 ```
-ATLAS_LLM_PROVIDER=groq
+ATLAS_LLM_PROVIDER=groq,gemini
 GROQ_API_KEY=
 GROQ_MODEL=llama-3.1-8b-instant
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
 ```
+
+Groq rate-limit or unavailability falls back to Gemini automatically. Auth and bad-request errors do not fall back. Optional `GROQ_BASE_URL` and `GEMINI_BASE_URL` override endpoints.
 
 Restart the backend after changing `.env`. Live API tests (skipped by default):
 
