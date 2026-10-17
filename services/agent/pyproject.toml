@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atlas-agent"
+version = "0.0.1"
+description = "Atlas agent backend"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.143.3",
+    "uvicorn[standard]==0.54.0",
+    "pydantic==2.14.1",
+    "python-dotenv==1.2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "httpx==0.28.1",
+    "ruff==0.17.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atlas_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

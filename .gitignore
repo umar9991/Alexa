@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment and secrets
+.env
+.env.local
+
+# Node
+node_modules/
+dist/
+.npm
+*.log
+npm-debug.log*
+
+# Electron / Vite
+out/
+release/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Atlas workspace
+workspace/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
