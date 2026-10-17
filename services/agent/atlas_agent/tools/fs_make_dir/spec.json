@@ -1,0 +1,13 @@
+{
+  "name": "fs.make_dir",
+  "description": "Create a directory in the workspace, including parent folders. Path is relative to the workspace. Idempotent. Path '.' is not allowed.",
+  "tier": "T1",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" }
+    },
+    "required": ["path"],
+    "additionalProperties": false
+  }
+}

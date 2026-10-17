@@ -1,0 +1,14 @@
+{
+  "name": "fs.write_text",
+  "description": "Create a new UTF-8 text file in the workspace. Path is relative to the workspace. Create-only: never overwrites an existing file. Allowed extensions: .txt .md .json .csv .sql .html .css. Maximum 200 KB.",
+  "tier": "T1",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" },
+      "content": { "type": "string" }
+    },
+    "required": ["path", "content"],
+    "additionalProperties": false
+  }
+}

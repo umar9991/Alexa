@@ -83,6 +83,7 @@ async def run_scripted(
     max_steps: int = 6,
     cancel_event: asyncio.Event | None = None,
     run_id: str = "run-1",
+    workspace: Path | None = None,
 ) -> RecordingEmitter:
     emitter = RecordingEmitter()
     await run_agent(
@@ -97,5 +98,6 @@ async def run_scripted(
         approval_timeout_s=approval_timeout_s,
         max_steps=max_steps,
         cancel_event=cancel_event,
+        workspace=workspace,
     )
     return emitter

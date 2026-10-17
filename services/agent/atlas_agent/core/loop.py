@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from jsonschema import ValidationError
@@ -21,8 +23,21 @@ from atlas_agent.core.events import (
     ToolResult,
 )
 from atlas_agent.core.policy import Decision, Tier, decide
-from atlas_agent.llm.base import LLMProvider, ToolCall
+from atlas_agent.core.prompts import SYSTEM_PROMPT
+from atlas_agent.llm.base import (
+    LLMAuthError,
+    LLMBadRequest,
+    LLMError,
+    LLMProvider,
+    LLMRateLimited,
+    LLMUnavailable,
+    ToolCall,
+)
+from atlas_agent.llm.groq import truncate_tool_content
+from atlas_agent.tools.context import ToolContext, ToolError
 from atlas_agent.tools.registry import ToolRegistry, ToolSpec, format_invalid_args
+
+logger = logging.getLogger("atlas_agent")
 
 EmitFn = Callable[[AgentEvent], Awaitable[None]]
 ApprovalWaiter = Callable[[str], Awaitable[bool]]
@@ -46,16 +61,24 @@ async def run_agent(
     approval_timeout_s: float = 60,
     max_steps: int = 6,
     cancel_event: asyncio.Event | None = None,
+    workspace: Path | None = None,
 ) -> None:
     await emit(RunStarted(run_id=run_id, ts=utc_now(), task=task))
-    messages: list[dict[str, object]] = [{"role": "user", "content": task}]
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": task},
+    ]
     tools = registry.specs()
 
     for _step in range(max_steps):
         if _cancelled(cancel_event):
             await emit(_finished(run_id, "cancelled", "cancelled"))
             return
-        turn = await provider.step(messages, tools)
+        try:
+            turn = await provider.step(messages, tools)
+        except LLMError as exc:
+            await emit(_finished(run_id, "failed", _llm_failure_summary(exc)))
+            return
         if _cancelled(cancel_event):
             await emit(_finished(run_id, "cancelled", "cancelled"))
             return
@@ -65,7 +88,9 @@ async def run_agent(
             summary = turn.text if turn.text else "done"
             await emit(_finished(run_id, "done", summary))
             return
-        for call in turn.tool_calls:
+        prepared = _with_call_ids(turn.tool_calls)
+        messages.append(_assistant_record(turn.text, prepared))
+        for call in prepared:
             if _cancelled(cancel_event):
                 await emit(_finished(run_id, "cancelled", "cancelled"))
                 return
@@ -80,6 +105,7 @@ async def run_agent(
                 approval_timeout_s=approval_timeout_s,
                 cancel_event=cancel_event,
                 messages=messages,
+                workspace=workspace,
             )
             if _cancelled(cancel_event):
                 await emit(_finished(run_id, "cancelled", "cancelled"))
@@ -110,6 +136,7 @@ async def _handle_tool_call(
     approval_timeout_s: float,
     cancel_event: asyncio.Event | None,
     messages: list[dict[str, object]],
+    workspace: Path | None,
 ) -> None:
     call_id = call.call_id or str(uuid.uuid4())
     loaded = registry.get(call.name)
@@ -126,6 +153,24 @@ async def _handle_tool_call(
             tier=tier,
         )
     )
+    if call.parse_error:
+        await _complete_call(
+            run_id=run_id,
+            call_id=call_id,
+            tool=call.name,
+            args=args,
+            tier=tier,
+            decision="invalid_args",
+            approved=False,
+            ok=False,
+            output=None,
+            error=call.parse_error,
+            duration_ms=0,
+            emit=emit,
+            audit=audit,
+            messages=messages,
+        )
+        return
     decision = policy_decide(spec, args)
     if decision.action == "deny":
         await _complete_call(
@@ -202,17 +247,23 @@ async def _handle_tool_call(
             return
 
     started = time.perf_counter()
+    ctx = ToolContext(workspace=workspace, run_id=run_id)
     try:
-        output = await registry.run(call.name, args)
+        output = await registry.run(call.name, args, ctx)
         error = None
         ok = True
     except ValidationError as exc:
         output = None
         error = format_invalid_args(exc)
         ok = False
-    except Exception as exc:  # noqa: BLE001
+    except ToolError as exc:
         output = None
-        error = _short_error(exc)
+        error = str(exc)
+        ok = False
+    except Exception:
+        logger.exception("internal tool error in %s", call.name)
+        output = None
+        error = "internal tool error"
         ok = False
     duration_ms = int((time.perf_counter() - started) * 1000)
     await _complete_call(
@@ -245,15 +296,6 @@ async def _await_approval(
 
 def _approval_summary(tool: str, args: dict[str, object]) -> str:
     return f"{tool} {json.dumps(args, ensure_ascii=True)}"
-
-
-def _short_error(exc: Exception) -> str:
-    text = f"{type(exc).__name__}: {exc}"
-    if "Traceback" in text:
-        text = f"{type(exc).__name__}: {exc.args[0] if exc.args else 'error'}"
-    if len(text) > 200:
-        return text[:197] + "..."
-    return text
 
 
 async def _complete_call(
@@ -297,10 +339,45 @@ async def _complete_call(
         duration_ms=duration_ms,
     )
     payload = {"ok": ok, "output": output, "error": error}
+    content = json.dumps(payload, ensure_ascii=True)
     messages.append(
         {
             "role": "tool",
+            "tool_call_id": call_id,
             "name": tool,
-            "content": json.dumps(payload, ensure_ascii=True),
+            "content": truncate_tool_content(content),
         }
     )
+
+
+def _with_call_ids(calls: list[ToolCall]) -> list[ToolCall]:
+    prepared: list[ToolCall] = []
+    for call in calls:
+        call_id = call.call_id or str(uuid.uuid4())
+        prepared.append(call.model_copy(update={"call_id": call_id}))
+    return prepared
+
+
+def _assistant_record(text: str | None, calls: list[ToolCall]) -> dict[str, object]:
+    return {
+        "role": "assistant",
+        "content": text,
+        "tool_calls": [
+            {"id": call.call_id, "name": call.name, "args": call.args} for call in calls
+        ],
+    }
+
+
+def _llm_failure_summary(exc: LLMError) -> str:
+    if isinstance(exc, LLMRateLimited):
+        if exc.retry_after_s is not None:
+            seconds = max(1, int(exc.retry_after_s))
+            return f"Groq rate limit reached, try again in about {seconds} seconds"
+        return "Groq rate limit reached, try again later"
+    if isinstance(exc, LLMAuthError):
+        return "GROQ_API_KEY is missing or invalid"
+    if isinstance(exc, LLMBadRequest):
+        return "Groq rejected the request"
+    if isinstance(exc, LLMUnavailable):
+        return "LLM is temporarily unavailable"
+    return "LLM request failed"

@@ -1,0 +1,13 @@
+{
+  "name": "fs.read_text",
+  "description": "Read a UTF-8 text file from the workspace. Path is relative to the workspace. Maximum 100 KB.",
+  "tier": "T0",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" }
+    },
+    "required": ["path"],
+    "additionalProperties": false
+  }
+}

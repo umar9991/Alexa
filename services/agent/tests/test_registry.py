@@ -18,7 +18,14 @@ def test_registry_loads_demo_tools() -> None:
     assert echo.spec.tier is Tier.T0
     assert dangerous.spec.tier is Tier.T2
     names = {item["name"] for item in registry.specs()}
-    assert names == {"demo.echo", "demo.dangerous"}
+    assert names == {
+        "demo.echo",
+        "demo.dangerous",
+        "fs.list",
+        "fs.read_text",
+        "fs.make_dir",
+        "fs.write_text",
+    }
 
 
 def test_invalid_spec_is_rejected(tmp_path: Path) -> None:

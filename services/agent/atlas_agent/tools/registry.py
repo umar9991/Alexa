@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,9 @@ from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
 from atlas_agent.core.policy import Tier
+from atlas_agent.tools.context import ToolContext, ToolError
+
+logger = logging.getLogger("atlas_agent")
 
 
 class ToolSpec(BaseModel):
@@ -28,7 +32,7 @@ class ToolRegistryError(ValueError):
 @dataclass
 class LoadedTool:
     spec: ToolSpec
-    run: Callable[[dict[str, object]], Awaitable[dict[str, object]]]
+    run: Callable[[dict[str, object], ToolContext], Awaitable[dict[str, object]]]
 
 
 class ToolRegistry:
@@ -46,6 +50,10 @@ class ToolRegistry:
             if not spec_path.exists():
                 continue
             spec = _read_spec(spec_path)
+            if "__" in spec.name:
+                raise ToolRegistryError(
+                    f"invalid tool name {spec.name}: names must not contain '__'"
+                )
             if spec.name in loaded:
                 raise ToolRegistryError(f"duplicate tool name: {spec.name}")
             handler_path = child / "handler.py"
@@ -61,13 +69,20 @@ class ToolRegistry:
     def specs(self) -> list[dict[str, object]]:
         return [tool.spec.model_dump(mode="json") for tool in self._tools.values()]
 
-    async def run(self, name: str, args: dict[str, object]) -> dict[str, object]:
+    async def run(
+        self, name: str, args: dict[str, object], ctx: ToolContext
+    ) -> dict[str, object]:
         tool = self.get(name)
         if tool is None:
             raise ToolRegistryError(f"unknown tool: {name}")
         validate(instance=args, schema=tool.spec.input_schema)
-        result = await tool.run(args)
-        return result
+        try:
+            return await tool.run(args, ctx)
+        except ToolError:
+            raise
+        except Exception:
+            logger.exception("internal tool error in %s", name)
+            raise ToolError("internal tool error") from None
 
 
 def _read_spec(spec_path: Path) -> ToolSpec:
@@ -81,7 +96,9 @@ def _read_spec(spec_path: Path) -> ToolSpec:
         raise ToolRegistryError(f"invalid spec in {spec_path}: {exc}") from exc
 
 
-def _load_run(handler_path: Path, tool_name: str) -> Callable[[dict[str, object]], Awaitable[dict[str, object]]]:
+def _load_run(
+    handler_path: Path, tool_name: str
+) -> Callable[[dict[str, object], ToolContext], Awaitable[dict[str, object]]]:
     module_name = f"atlas_agent.tools._loaded_{handler_path.parent.name}"
     spec = importlib.util.spec_from_file_location(module_name, handler_path)
     if spec is None or spec.loader is None:

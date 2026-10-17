@@ -44,3 +44,24 @@ The backend WebSocket (`ws://localhost:8000/ws`) still sends `hello` on connect 
 python scripts/ws_demo.py "hello"
 python scripts/ws_demo.py "danger delete everything"
 ```
+
+## LLM provider
+
+Copy `.env.example` to `.env`. Default `ATLAS_LLM_PROVIDER=scripted` needs no key. For Groq, set:
+
+```
+ATLAS_LLM_PROVIDER=groq
+GROQ_API_KEY=
+GROQ_MODEL=llama-3.1-8b-instant
+```
+
+Restart the backend after changing `.env`. Live API tests (skipped by default):
+
+```powershell
+$env:ATLAS_LIVE_TESTS="1"
+pytest -q -m live
+```
+
+## Workspace tools
+
+Set `ATLAS_WORKSPACE` in `.env` to an absolute folder (for example `D:\Atlas\workspace`). On startup the backend creates that folder and `_trash/` if needed. `fs.list`, `fs.read_text`, `fs.make_dir`, and `fs.write_text` only work inside it, using relative paths. Overwrite, move, and delete are not available yet. If `ATLAS_WORKSPACE` is empty, those tools fail with `workspace is not configured`.

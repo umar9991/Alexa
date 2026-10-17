@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from atlas_agent import __version__
+from atlas_agent.config import ensure_workspace, load_settings
 from atlas_agent.core.audit import AuditLog
 from atlas_agent.core.events import (
     AgentEvent,
@@ -18,7 +19,7 @@ from atlas_agent.core.events import (
     UserMessage,
 )
 from atlas_agent.core.loop import run_agent
-from atlas_agent.llm.scripted import ScriptedProvider
+from atlas_agent.llm.factory import build_provider
 from atlas_agent.tools.registry import ToolRegistry
 
 app = FastAPI(title="atlas")
@@ -30,8 +31,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_settings = load_settings()
+_workspace = ensure_workspace(_settings.workspace)
 _registry = ToolRegistry.load()
-_provider = ScriptedProvider()
+_provider = build_provider(_settings)
 
 
 @app.get("/health")
@@ -147,5 +150,6 @@ async def _start_run(websocket: WebSocket, session: ConnectionSession, text: str
             audit=audit,
             run_id=run_id,
             cancel_event=session.cancel_event,
+            workspace=_workspace,
         )
     )
