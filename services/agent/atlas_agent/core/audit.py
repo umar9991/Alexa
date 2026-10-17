@@ -31,6 +31,7 @@ class AuditLog:
         ok: bool,
         error: str | None,
         duration_ms: int,
+        summary: str | None = None,
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         record = {
@@ -45,6 +46,7 @@ class AuditLog:
             "ok": ok,
             "error": error,
             "duration_ms": duration_ms,
+            "summary": truncate_args(summary) if summary is not None else None,
         }
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=True) + "\n")

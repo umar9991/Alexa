@@ -153,6 +153,7 @@ async def _handle_tool_call(
             tier=tier,
         )
     )
+    ctx = ToolContext(workspace=workspace, run_id=run_id)
     if call.parse_error:
         await _complete_call(
             run_id=run_id,
@@ -171,6 +172,51 @@ async def _handle_tool_call(
             messages=messages,
         )
         return
+    if loaded is not None:
+        try:
+            registry.validate_args(call.name, args)
+        except ValidationError as exc:
+            await _complete_call(
+                run_id=run_id,
+                call_id=call_id,
+                tool=call.name,
+                args=args,
+                tier=tier,
+                decision="invalid_args",
+                approved=False,
+                ok=False,
+                output=None,
+                error=format_invalid_args(exc),
+                duration_ms=0,
+                emit=emit,
+                audit=audit,
+                messages=messages,
+            )
+            return
+    summary = _approval_summary(call.name, args)
+    if loaded is not None and loaded.describe is not None:
+        try:
+            described = await registry.describe(call.name, args, ctx)
+        except ToolError as exc:
+            await _complete_call(
+                run_id=run_id,
+                call_id=call_id,
+                tool=call.name,
+                args=args,
+                tier=tier,
+                decision="deny",
+                approved=False,
+                ok=False,
+                output=None,
+                error=str(exc),
+                duration_ms=0,
+                emit=emit,
+                audit=audit,
+                messages=messages,
+            )
+            return
+        if described:
+            summary = described
     decision = policy_decide(spec, args)
     if decision.action == "deny":
         await _complete_call(
@@ -188,6 +234,7 @@ async def _handle_tool_call(
             emit=emit,
             audit=audit,
             messages=messages,
+            summary=summary,
         )
         return
 
@@ -202,7 +249,7 @@ async def _handle_tool_call(
                 tool=call.name,
                 args=args,
                 tier=tier,
-                summary=_approval_summary(call.name, args),
+                summary=summary,
             )
         )
         approved, timed_out = await _await_approval(
@@ -224,6 +271,7 @@ async def _handle_tool_call(
                 emit=emit,
                 audit=audit,
                 messages=messages,
+                summary=summary,
             )
             return
         if not approved:
@@ -243,11 +291,11 @@ async def _handle_tool_call(
                 emit=emit,
                 audit=audit,
                 messages=messages,
+                summary=summary,
             )
             return
 
     started = time.perf_counter()
-    ctx = ToolContext(workspace=workspace, run_id=run_id)
     try:
         output = await registry.run(call.name, args, ctx)
         error = None
@@ -281,6 +329,7 @@ async def _handle_tool_call(
         emit=emit,
         audit=audit,
         messages=messages,
+        summary=summary,
     )
 
 
@@ -314,6 +363,7 @@ async def _complete_call(
     emit: EmitFn,
     audit: AuditLog,
     messages: list[dict[str, object]],
+    summary: str | None = None,
 ) -> None:
     await emit(
         ToolResult(
@@ -337,6 +387,7 @@ async def _complete_call(
         ok=ok,
         error=error,
         duration_ms=duration_ms,
+        summary=summary,
     )
     payload = {"ok": ok, "output": output, "error": error}
     content = json.dumps(payload, ensure_ascii=True)

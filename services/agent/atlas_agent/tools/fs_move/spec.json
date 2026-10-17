@@ -1,0 +1,14 @@
+{
+  "name": "fs.move",
+  "description": "Move or rename a file or folder inside the workspace. Destination must not exist. Source may be inside _trash to restore. Destination cannot be inside _trash.",
+  "tier": "T1",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "source": { "type": "string" },
+      "destination": { "type": "string" }
+    },
+    "required": ["source", "destination"],
+    "additionalProperties": false
+  }
+}

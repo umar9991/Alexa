@@ -49,30 +49,30 @@ def test_jail_accepts_root_when_allowed(tmp_path: Path) -> None:
     assert resolved == workspace.resolve()
 
 
-@pytest.mark.parametrize(
-    "rel",
-    [
-        "..",
-        "a/../../x",
-        "a/..",
-        "/etc/passwd",
-        "C:\\Windows",
-        "C:foo",
-        "//server/share/x",
-        "~/x",
-        "x\x00y",
-        "file.txt:stream",
-        "CON",
-        "con.txt",
-        "nul",
-        "COM1.log",
-        "foo.",
-        "foo ",
-        "a<b",
-        "",
-        "a" * 201,
-    ],
-)
+UNSAFE_REL_PATHS = [
+    "..",
+    "a/../../x",
+    "a/..",
+    "/etc/passwd",
+    "C:\\Windows",
+    "C:foo",
+    "//server/share/x",
+    "~/x",
+    "x\x00y",
+    "file.txt:stream",
+    "CON",
+    "con.txt",
+    "nul",
+    "COM1.log",
+    "foo.",
+    "foo ",
+    "a<b",
+    "",
+    "a" * 201,
+]
+
+
+@pytest.mark.parametrize("rel", UNSAFE_REL_PATHS)
 def test_jail_rejects_unsafe_paths(tmp_path: Path, rel: str) -> None:
     workspace = tmp_path / "ws"
     workspace.mkdir()
@@ -128,6 +128,25 @@ def test_forbid_trash_rejects_writes_allows_resolve(tmp_path: Path) -> None:
     with pytest.raises(ToolError, match="_trash") as exc_info:
         resolve_in_workspace(workspace, "_trash/x.txt", forbid_trash=True)
     _assert_no_abs(workspace, str(exc_info.value))
+
+
+def test_jail_rejects_bidi_zero_width_and_long_abs(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    with pytest.raises(ToolError) as bidi:
+        resolve_in_workspace(workspace, "a\u202e.txt")
+    _assert_no_abs(workspace, str(bidi.value))
+    with pytest.raises(ToolError) as zw:
+        resolve_in_workspace(workspace, "a\u200b.txt")
+    _assert_no_abs(workspace, str(zw.value))
+    root = str(workspace.resolve())
+    extra = 241 - len(root) - 1
+    rel = "a" * max(extra, 1)
+    if len(rel) > 200:
+        rel = "a" * 200
+    with pytest.raises(ToolError) as long_path:
+        resolve_in_workspace(workspace, rel)
+    _assert_no_abs(workspace, str(long_path.value))
 
 
 def _is_inside(workspace: Path, candidate: Path) -> bool:

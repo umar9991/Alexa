@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,10 @@ from atlas_agent.core.policy import Tier
 from atlas_agent.tools.context import ToolContext, ToolError
 
 logger = logging.getLogger("atlas_agent")
+
+DescribeFn = Callable[[dict[str, object], ToolContext], Awaitable[str]]
+RunFn = Callable[[dict[str, object], ToolContext], Awaitable[dict[str, object]]]
+SUMMARY_LIMIT = 300
 
 
 class ToolSpec(BaseModel):
@@ -32,7 +37,8 @@ class ToolRegistryError(ValueError):
 @dataclass
 class LoadedTool:
     spec: ToolSpec
-    run: Callable[[dict[str, object], ToolContext], Awaitable[dict[str, object]]]
+    run: RunFn
+    describe: DescribeFn | None = None
 
 
 class ToolRegistry:
@@ -59,8 +65,8 @@ class ToolRegistry:
             handler_path = child / "handler.py"
             if not handler_path.exists():
                 raise ToolRegistryError(f"missing handler for tool {spec.name} in {child}")
-            run = _load_run(handler_path, spec.name)
-            loaded[spec.name] = LoadedTool(spec=spec, run=run)
+            run, describe = _load_handler(handler_path, spec.name)
+            loaded[spec.name] = LoadedTool(spec=spec, run=run, describe=describe)
         return cls(loaded)
 
     def get(self, name: str) -> LoadedTool | None:
@@ -69,13 +75,36 @@ class ToolRegistry:
     def specs(self) -> list[dict[str, object]]:
         return [tool.spec.model_dump(mode="json") for tool in self._tools.values()]
 
+    def validate_args(self, name: str, args: dict[str, object]) -> None:
+        tool = self.get(name)
+        if tool is None:
+            raise ToolRegistryError(f"unknown tool: {name}")
+        validate(instance=args, schema=tool.spec.input_schema)
+
+    async def describe(
+        self, name: str, args: dict[str, object], ctx: ToolContext
+    ) -> str | None:
+        tool = self.get(name)
+        if tool is None or tool.describe is None:
+            return None
+        try:
+            raw = await tool.describe(args, ctx)
+        except ToolError:
+            raise
+        except Exception:
+            logger.exception("internal tool error in %s describe", name)
+            raise ToolError("internal tool error") from None
+        if not isinstance(raw, str):
+            raw = str(raw)
+        return sanitize_summary(raw)
+
     async def run(
         self, name: str, args: dict[str, object], ctx: ToolContext
     ) -> dict[str, object]:
         tool = self.get(name)
         if tool is None:
             raise ToolRegistryError(f"unknown tool: {name}")
-        validate(instance=args, schema=tool.spec.input_schema)
+        self.validate_args(name, args)
         try:
             return await tool.run(args, ctx)
         except ToolError:
@@ -96,9 +125,9 @@ def _read_spec(spec_path: Path) -> ToolSpec:
         raise ToolRegistryError(f"invalid spec in {spec_path}: {exc}") from exc
 
 
-def _load_run(
+def _load_handler(
     handler_path: Path, tool_name: str
-) -> Callable[[dict[str, object], ToolContext], Awaitable[dict[str, object]]]:
+) -> tuple[RunFn, DescribeFn | None]:
     module_name = f"atlas_agent.tools._loaded_{handler_path.parent.name}"
     spec = importlib.util.spec_from_file_location(module_name, handler_path)
     if spec is None or spec.loader is None:
@@ -108,7 +137,21 @@ def _load_run(
     run = getattr(module, "run", None)
     if run is None or not callable(run):
         raise ToolRegistryError(f"missing handler for tool {tool_name} in {handler_path}")
-    return run
+    describe_attr = getattr(module, "describe", None)
+    describe: DescribeFn | None = describe_attr if callable(describe_attr) else None
+    return run, describe
+
+
+def sanitize_summary(text: str) -> str:
+    cleaned: list[str] = []
+    for ch in text.replace("\r", " ").replace("\n", " "):
+        if unicodedata.category(ch) in {"Cc", "Cf"}:
+            continue
+        cleaned.append(ch)
+    out = "".join(cleaned).strip()
+    if len(out) > SUMMARY_LIMIT:
+        return out[:SUMMARY_LIMIT]
+    return out
 
 
 def format_invalid_args(error: ValidationError) -> str:

@@ -4,9 +4,9 @@ import asyncio
 import json
 from pathlib import Path
 
-from atlas_agent.core.events import ToolResult
+from atlas_agent.core.events import ApprovalRequired, ToolResult
 from atlas_agent.core.loop import run_agent
-from atlas_agent.core.policy import decide
+from atlas_agent.core.policy import Tier, decide
 from atlas_agent.llm.base import AgentTurn, LLMAuthError, LLMRateLimited, ToolCall
 from atlas_agent.llm.scripted import ScriptedProvider
 from atlas_agent.tools.context import ToolContext, ToolError
@@ -424,3 +424,273 @@ def test_loop_passes_tool_context(tmp_path: Path) -> None:
         assert seen[0].workspace == workspace
 
     asyncio.run(_run())
+
+
+def _no_abs(workspace: Path, blob: str) -> None:
+    resolved = str(workspace.resolve())
+    assert resolved not in blob
+    assert resolved.replace("\\", "/") not in blob
+
+
+def _events_blob(emitter: RecordingEmitter) -> str:
+    return json.dumps([event.model_dump(mode="json") for event in emitter.events], default=str)
+
+
+def test_loop_t2_fs_invalid_skips_approval(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    async def _run() -> None:
+        for tool, bad_args in (
+            ("fs.delete", {"path": ".."}),
+            ("fs.overwrite_text", {"path": "..", "content": "x"}),
+        ):
+            provider = SequenceProvider(
+                [
+                    AgentTurn(tool_calls=[ToolCall(name=tool, args=bad_args)]),
+                    AgentTurn(text="done"),
+                ]
+            )
+            emitter = RecordingEmitter()
+            await run_agent(
+                "hello",
+                provider=provider,
+                registry=default_registry(),
+                emit=emitter.emit,
+                wait_approval=wait_true,
+                audit=make_audit(tmp_path / tool),
+                run_id=f"run-{tool}",
+                policy_decide=decide,
+                workspace=workspace,
+            )
+            assert "approval_required" not in emitter.types()
+            result = emitter.of_type("tool_result")[0]
+            assert isinstance(result, ToolResult)
+            assert result.ok is False
+            _no_abs(workspace, _events_blob(emitter))
+            _no_abs(workspace, result.error or "")
+
+    asyncio.run(_run())
+
+
+def test_loop_t2_fs_approval_reject_timeout_approve(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "target.txt").write_text("keep", encoding="utf-8")
+    (workspace / "notes.md").write_text("old", encoding="utf-8")
+
+    async def _check(
+        tool: str,
+        args: dict[str, object],
+        waiter: object,
+        timeout: float,
+        should_change: bool,
+        expect_ok: bool,
+    ) -> RecordingEmitter:
+        provider = SequenceProvider(
+            [
+                AgentTurn(tool_calls=[ToolCall(name=tool, args=args)]),
+                AgentTurn(text="done"),
+            ]
+        )
+        emitter = RecordingEmitter()
+        registry = default_registry()
+        described = await registry.describe(
+            tool, args, ToolContext(workspace=workspace, run_id="x")
+        )
+        await run_agent(
+            "hello",
+            provider=provider,
+            registry=default_registry(),
+            emit=emitter.emit,
+            wait_approval=waiter,  # type: ignore[arg-type]
+            audit=make_audit(tmp_path / f"{tool}-{timeout}"),
+            run_id="run-t2",
+            policy_decide=decide,
+            workspace=workspace,
+            approval_timeout_s=timeout,
+        )
+        required = emitter.of_type("approval_required")
+        assert required
+        card = required[0]
+        assert isinstance(card, ApprovalRequired)
+        assert described is not None
+        assert card.summary == described
+        assert "\n" not in card.summary
+        _no_abs(workspace, card.summary)
+        result = emitter.of_type("tool_result")[0]
+        assert isinstance(result, ToolResult)
+        assert result.ok is expect_ok
+        _no_abs(workspace, _events_blob(emitter))
+        del should_change
+        return emitter
+
+    async def _run() -> None:
+        await _check("fs.delete", {"path": "target.txt"}, wait_false, 60, False, False)
+        assert (workspace / "target.txt").read_text(encoding="utf-8") == "keep"
+        await _check("fs.delete", {"path": "target.txt"}, wait_forever, 0.05, False, False)
+        assert (workspace / "target.txt").read_text(encoding="utf-8") == "keep"
+        await _check("fs.delete", {"path": "target.txt"}, wait_true, 60, True, True)
+        assert not (workspace / "target.txt").exists()
+        await _check(
+            "fs.overwrite_text",
+            {"path": "notes.md", "content": "new"},
+            wait_false,
+            60,
+            False,
+            False,
+        )
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "old"
+        await _check(
+            "fs.overwrite_text",
+            {"path": "notes.md", "content": "new"},
+            wait_forever,
+            0.05,
+            False,
+            False,
+        )
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "old"
+        await _check(
+            "fs.overwrite_text",
+            {"path": "notes.md", "content": "new"},
+            wait_true,
+            60,
+            True,
+            True,
+        )
+        assert (workspace / "notes.md").read_text(encoding="utf-8") == "new"
+
+    asyncio.run(_run())
+
+
+def test_loop_t2_toctou_file_vanishes(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    target = workspace / "gone.txt"
+    target.write_text("x", encoding="utf-8")
+
+    async def waiter(_call_id: str) -> bool:
+        target.unlink()
+        return True
+
+    async def _run() -> None:
+        provider = SequenceProvider(
+            [
+                AgentTurn(tool_calls=[ToolCall(name="fs.delete", args={"path": "gone.txt"})]),
+                AgentTurn(text="done"),
+            ]
+        )
+        emitter = RecordingEmitter()
+        await run_agent(
+            "hello",
+            provider=provider,
+            registry=default_registry(),
+            emit=emitter.emit,
+            wait_approval=waiter,
+            audit=make_audit(tmp_path),
+            run_id="run-toctou",
+            policy_decide=decide,
+            workspace=workspace,
+        )
+        assert "approval_required" in emitter.types()
+        result = emitter.of_type("tool_result")[0]
+        assert isinstance(result, ToolResult)
+        assert result.ok is False
+        assert result.error == "no longer exists"
+        _no_abs(workspace, result.error or "")
+        _no_abs(workspace, _events_blob(emitter))
+
+    asyncio.run(_run())
+
+
+def test_loop_describe_internal_error_skips_approval(tmp_path: Path) -> None:
+    async def boom(_args: dict[str, object], _ctx: ToolContext) -> str:
+        raise RuntimeError("describe crashed")
+
+    async def _run() -> None:
+        registry = default_registry()
+        tool = registry.get("demo.dangerous")
+        assert tool is not None
+        tool.describe = boom
+        provider = SequenceProvider(
+            [
+                AgentTurn(
+                    tool_calls=[ToolCall(name="demo.dangerous", args={"action": "wipe"})]
+                ),
+                AgentTurn(text="done"),
+            ]
+        )
+        emitter = RecordingEmitter()
+        await run_agent(
+            "danger",
+            provider=provider,
+            registry=registry,
+            emit=emitter.emit,
+            wait_approval=wait_true,
+            audit=make_audit(tmp_path),
+            run_id="run-desc",
+            policy_decide=decide,
+        )
+        assert "approval_required" not in emitter.types()
+        result = emitter.of_type("tool_result")[0]
+        assert isinstance(result, ToolResult)
+        assert result.error == "internal tool error"
+        assert "Traceback" not in (result.error or "")
+
+    asyncio.run(_run())
+
+
+def test_loop_t2_audit_has_summary(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "x.md").write_text("a", encoding="utf-8")
+    audit = make_audit(tmp_path)
+
+    async def _run() -> None:
+        provider = SequenceProvider(
+            [
+                AgentTurn(
+                    tool_calls=[
+                        ToolCall(name="fs.overwrite_text", args={"path": "x.md", "content": "b"})
+                    ]
+                ),
+                AgentTurn(text="done"),
+            ]
+        )
+        emitter = RecordingEmitter()
+        await run_agent(
+            "hello",
+            provider=provider,
+            registry=default_registry(),
+            emit=emitter.emit,
+            wait_approval=wait_true,
+            audit=audit,
+            run_id="run-aud",
+            policy_decide=decide,
+            workspace=workspace,
+        )
+        line = json.loads(audit.path.read_text(encoding="utf-8").splitlines()[0])
+        assert line["approved"] is True
+        assert line["decision"] == "needs_approval"
+        assert isinstance(line["summary"], str)
+        assert "x.md" in line["summary"]
+        blob = json.dumps(line)
+        _no_abs(workspace, blob)
+        _no_abs(workspace, _events_blob(emitter))
+
+    asyncio.run(_run())
+
+
+def test_t2_specs_still_require_approval() -> None:
+    registry = default_registry()
+    delete = registry.get("fs.delete")
+    overwrite = registry.get("fs.overwrite_text")
+    move = registry.get("fs.move")
+    assert delete is not None and overwrite is not None and move is not None
+    assert delete.spec.tier is Tier.T2
+    assert overwrite.spec.tier is Tier.T2
+    assert move.spec.tier is Tier.T1
+    assert decide(delete.spec, {"path": "a"}).action == "needs_approval"
+    assert decide(overwrite.spec, {"path": "a", "content": "b"}).action == "needs_approval"
+    assert decide(move.spec, {"source": "a", "destination": "b"}).action == "allow"
+

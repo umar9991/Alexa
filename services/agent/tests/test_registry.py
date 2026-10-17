@@ -25,7 +25,18 @@ def test_registry_loads_demo_tools() -> None:
         "fs.read_text",
         "fs.make_dir",
         "fs.write_text",
+        "fs.move",
+        "fs.delete",
+        "fs.overwrite_text",
     }
+    assert registry.get("fs.move") is not None
+    assert registry.get("fs.move").spec.tier is Tier.T1  # type: ignore[union-attr]
+    assert registry.get("fs.delete").spec.tier is Tier.T2  # type: ignore[union-attr]
+    assert registry.get("fs.overwrite_text").spec.tier is Tier.T2  # type: ignore[union-attr]
+    delete = registry.get("fs.delete")
+    overwrite = registry.get("fs.overwrite_text")
+    assert delete is not None and delete.describe is not None
+    assert overwrite is not None and overwrite.describe is not None
 
 
 def test_invalid_spec_is_rejected(tmp_path: Path) -> None:

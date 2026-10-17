@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 from atlas_agent.tools.context import ToolError
 
 MAX_REL_LEN = 200
+MAX_ABS_LEN = 240
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _FORBIDDEN_CHARS = set('<>:"|?*')
 _RESERVED = frozenset(
@@ -32,8 +34,10 @@ def resolve_in_workspace(
     candidate = (root / Path(*_segments(normalized))).resolve(strict=False)
     if not _is_inside(root, candidate):
         raise ToolError("path is outside the workspace")
+    if len(str(candidate)) > MAX_ABS_LEN:
+        raise ToolError("path is too long")
     display = _relative_display(root, candidate)
-    if forbid_trash and _is_trash(display):
+    if forbid_trash and is_trash_display(display):
         raise ToolError("writes into _trash are not allowed")
     return candidate
 
@@ -49,7 +53,7 @@ def display_path(workspace: Path, resolved: Path) -> str:
 def _normalize_relative(rel: str, *, allow_root: bool) -> str:
     if not isinstance(rel, str):
         raise ToolError("path must be a string")
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in rel):
+    if _has_hidden_or_control(rel):
         raise ToolError("path contains invalid characters")
     normalized = rel.replace("\\", "/")
     if len(normalized) > MAX_REL_LEN:
@@ -116,6 +120,15 @@ def _relative_display(root: Path, candidate: Path) -> str:
     return rel
 
 
-def _is_trash(display: str) -> bool:
+def is_trash_display(display: str) -> bool:
     first = display.split("/", 1)[0]
     return first.casefold() == "_trash"
+
+
+def _has_hidden_or_control(rel: str) -> bool:
+    for ch in rel:
+        if ord(ch) < 32 or ord(ch) == 127:
+            return True
+        if unicodedata.category(ch) in {"Cc", "Cf"}:
+            return True
+    return False

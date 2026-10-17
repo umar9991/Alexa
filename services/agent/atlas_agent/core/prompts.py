@@ -6,5 +6,7 @@ SYSTEM_PROMPT = (
     "If the user rejects an action, say so and do not retry it. "
     "Reply in the same language the user writes in (Roman Urdu, Hinglish, or English). "
     "File paths are always relative to the workspace and never absolute. "
-    "List a folder first instead of assuming what exists."
+    "List a folder first instead of assuming what exists. "
+    "Deleting never destroys data: it moves items to _trash. "
+    "Ask before bulk reorganization; if the user rejects an action, do not retry it."
 )

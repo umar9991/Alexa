@@ -3,11 +3,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from atlas_agent.core.fsutil import ALLOWED_TEXT_EXTENSIONS, WRITE_LIMIT
 from atlas_agent.core.pathjail import display_path, resolve_in_workspace
 from atlas_agent.tools.context import ToolContext, ToolError, require_workspace
-
-ALLOWED_EXTENSIONS = frozenset({".txt", ".md", ".json", ".csv", ".sql", ".html", ".css"})
-WRITE_LIMIT = 200 * 1024
 
 
 async def run(args: dict[str, object], ctx: ToolContext) -> dict[str, object]:
@@ -25,7 +23,7 @@ def _write_sync(workspace: Path, rel: str, content: str) -> dict[str, object]:
     target = resolve_in_workspace(workspace, rel, allow_root=False, forbid_trash=True)
     shown = display_path(workspace, target)
     suffix = Path(shown).suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
+    if suffix not in ALLOWED_TEXT_EXTENSIONS:
         raise ToolError("file extension is not allowed")
     encoded = content.encode("utf-8")
     if len(encoded) > WRITE_LIMIT:

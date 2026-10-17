@@ -1,0 +1,14 @@
+{
+  "name": "fs.overwrite_text",
+  "description": "Replace the contents of an existing UTF-8 text file. The old version is saved to _trash. Use fs.write_text to create a new file. Requires approval. Allowed extensions: .txt .md .json .csv .sql .html .css. Maximum 200 KB.",
+  "tier": "T2",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" },
+      "content": { "type": "string" }
+    },
+    "required": ["path", "content"],
+    "additionalProperties": false
+  }
+}
