@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 from atlas_agent.core.pathjail import display_path, resolve_in_workspace
@@ -25,15 +26,19 @@ def _list_sync(workspace: Path, rel: str) -> dict[str, object]:
     if not target.is_dir():
         raise ToolError("not a directory")
     dirs: list[dict[str, object]] = []
+    links: list[dict[str, object]] = []
     files: list[dict[str, object]] = []
     for child in target.iterdir():
-        if child.is_dir():
+        if os.path.islink(child) or os.path.isjunction(child):
+            links.append({"name": child.name, "type": "link", "size": None})
+        elif child.is_dir():
             dirs.append({"name": child.name, "type": "dir", "size": None})
         elif child.is_file():
             files.append({"name": child.name, "type": "file", "size": child.stat().st_size})
     dirs.sort(key=lambda item: str(item["name"]).casefold())
+    links.sort(key=lambda item: str(item["name"]).casefold())
     files.sort(key=lambda item: str(item["name"]).casefold())
-    combined = dirs + files
+    combined = dirs + links + files
     truncated = len(combined) > LIST_LIMIT
     return {
         "path": shown,

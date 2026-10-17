@@ -32,7 +32,7 @@ def count_tree(path: Path) -> tuple[int, int, bool]:
             info = current.lstat()
         except OSError:
             continue
-        if stat.S_ISLNK(info.st_mode):
+        if os.path.islink(current) or os.path.isjunction(current):
             size += info.st_size
             continue
         if stat.S_ISREG(info.st_mode):
@@ -49,8 +49,8 @@ def count_tree(path: Path) -> tuple[int, int, bool]:
 
 
 def entry_kind(path: Path) -> str:
-    if path.is_symlink():
-        return "file"
+    if os.path.islink(path) or os.path.isjunction(path):
+        return "link"
     if path.is_dir():
         return "dir"
     return "file"

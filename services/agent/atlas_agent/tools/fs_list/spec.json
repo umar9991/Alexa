@@ -1,6 +1,6 @@
 {
   "name": "fs.list",
-  "description": "List files and folders in the workspace. Path is relative to the workspace; use '.' for the root. List a folder instead of guessing what exists.",
+  "description": "List files and folders in the workspace. Path is relative to the workspace; use '.' for the root. Entries are type file, dir, or link. List a folder instead of guessing what exists.",
   "tier": "T0",
   "input_schema": {
     "type": "object",

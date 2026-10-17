@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import unicodedata
 from pathlib import Path
@@ -31,7 +32,9 @@ def resolve_in_workspace(
 ) -> Path:
     normalized = _normalize_relative(rel, allow_root=allow_root)
     root = workspace.resolve(strict=False)
-    candidate = (root / Path(*_segments(normalized))).resolve(strict=False)
+    segments = _segments(normalized)
+    _reject_reparse_under_root(root, segments)
+    candidate = (root / Path(*segments)).resolve(strict=False)
     if not _is_inside(root, candidate):
         raise ToolError("path is outside the workspace")
     if len(str(candidate)) > MAX_ABS_LEN:
@@ -118,6 +121,24 @@ def _relative_display(root: Path, candidate: Path) -> str:
     if rel in ("", "."):
         return "."
     return rel
+
+
+def is_reparse_point(path: Path) -> bool:
+    return os.path.islink(path) or os.path.isjunction(path)
+
+
+def _reject_reparse_under_root(root: Path, segments: list[str]) -> None:
+    current = root
+    for segment in segments:
+        current = current / segment
+        try:
+            present = current.exists()
+        except OSError:
+            present = False
+        if not present:
+            continue
+        if is_reparse_point(current):
+            raise ToolError("links are not supported inside the workspace")
 
 
 def is_trash_display(display: str) -> bool:

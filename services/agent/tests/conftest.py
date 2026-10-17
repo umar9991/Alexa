@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+import pytest
 
 from atlas_agent.core.audit import AuditLog
 from atlas_agent.core.events import AgentEvent
@@ -101,3 +106,49 @@ async def run_scripted(
         workspace=workspace,
     )
     return emitter
+
+
+def make_junction(link: Path, target: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("directory junctions require win32")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, (
+        completed.stderr.strip() or completed.stdout.strip() or "mklink /J failed"
+    )
+
+
+def make_symlink(link: Path, target: Path, *, target_is_directory: bool = True) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as exc:
+        pytest.skip(f"cannot create symlink: {exc}")
+
+
+def remove_reparse(path: Path) -> None:
+    if not path.exists():
+        return
+    if os.path.isjunction(path):
+        os.rmdir(path)
+        return
+    if os.path.islink(path):
+        path.unlink()
+
+
+def outside_layout(tmp_path: Path) -> tuple[Path, Path]:
+    workspace = tmp_path / "ws"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret-bytes", encoding="utf-8")
+    nested = outside / "sub"
+    nested.mkdir()
+    (nested / "nested.txt").write_text("nested-bytes", encoding="utf-8")
+    return workspace, outside
+

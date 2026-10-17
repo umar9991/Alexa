@@ -41,7 +41,12 @@ def _move_sync(workspace: Path, source_rel: str, dest_rel: str) -> dict[str, obj
         raise ToolError("source and destination are the same")
     if not src.exists():
         raise ToolError("source not found")
-    if src.is_dir() and not src.is_symlink() and dst_display.startswith(src_display + "/"):
+    if (
+        src.is_dir()
+        and not os.path.islink(src)
+        and not os.path.isjunction(src)
+        and dst_display.startswith(src_display + "/")
+    ):
         raise ToolError("cannot move a directory into itself")
     if dst.exists() and not case_only:
         raise ToolError("destination already exists")
