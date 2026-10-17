@@ -1,0 +1,13 @@
+{
+  "name": "demo.dangerous",
+  "description": "T2 demo tool that does nothing real.",
+  "tier": "T2",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "action": { "type": "string" }
+    },
+    "required": ["action"],
+    "additionalProperties": false
+  }
+}

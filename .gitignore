@@ -41,6 +41,7 @@ release/
 
 # Atlas workspace
 workspace/
+data/
 
 # OS / editor
 .DS_Store

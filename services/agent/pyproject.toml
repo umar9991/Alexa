@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn[standard]==0.54.0",
     "pydantic==2.14.1",
     "python-dotenv==1.2.4",
+    "jsonschema==4.26.0",
 ]
 
 [project.optional-dependencies]
@@ -24,6 +25,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["atlas_agent*"]
+
+[tool.setuptools.package-data]
+atlas_agent = ["tools/*/spec.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
