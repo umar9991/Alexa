@@ -14,7 +14,7 @@ asarUnpack:
 win:
   executableName: Atlas
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: ${name}-${version}-setup.${ext} 
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -29,7 +29,7 @@ mac:
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
-  target:
+  target: 
     - AppImage
     - snap
     - deb

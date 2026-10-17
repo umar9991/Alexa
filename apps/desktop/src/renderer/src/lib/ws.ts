@@ -1,3 +1,5 @@
+import { parseServerMessage, type ServerMessage } from './protocol'
+
 export type WsStatus = 'connecting' | 'connected' | 'disconnected'
 
 export interface AtlasWsClient {
@@ -7,8 +9,7 @@ export interface AtlasWsClient {
 
 export interface AtlasWsHandlers {
   onStatus: (status: WsStatus) => void
-  onHello: (payload: unknown) => void
-  onEcho: (payload: unknown) => void
+  onMessage: (message: ServerMessage) => void
 }
 
 const BACKOFF_MS = [1000, 2000, 4000] as const
@@ -19,10 +20,6 @@ function backoffMs(failCount: number): number {
     return BACKOFF_MS[failCount]
   }
   return MAX_BACKOFF_MS
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export function connectAtlasWs(url: string, handlers: AtlasWsHandlers): AtlasWsClient {
@@ -62,18 +59,15 @@ export function connectAtlasWs(url: string, handlers: AtlasWsHandlers): AtlasWsC
       try {
         payload = JSON.parse(event.data) as unknown
       } catch {
+        console.warn('ignored malformed websocket payload', event.data)
         return
       }
-      if (!isRecord(payload) || typeof payload.type !== 'string') {
+      const message = parseServerMessage(payload)
+      if (message === null) {
+        console.warn('ignored unknown websocket message', payload)
         return
       }
-      if (payload.type === 'hello') {
-        handlers.onHello(payload)
-        return
-      }
-      if (payload.type === 'echo') {
-        handlers.onEcho(payload)
-      }
+      handlers.onMessage(message)
     })
 
     ws.addEventListener('close', () => {
