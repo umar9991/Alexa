@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import logging
 import os
 from types import SimpleNamespace
 
@@ -19,9 +21,11 @@ from atlas_agent.llm.base import (
 from atlas_agent.llm.gemini import (
     SKIP_THOUGHT_SIGNATURE,
     GeminiProvider,
+    _retry_after_s,
     _translate_gemini_error,
     internal_to_gemini,
     parse_gemini_response,
+    parse_retry_duration,
     sanitize_gemini_schema,
     specs_to_gemini_tools,
 )
@@ -209,6 +213,32 @@ def test_parse_gemini_variants() -> None:
     assert parsed.tool_calls[0].args == {}
 
 
+def test_replay_decodes_stored_signature_bytes() -> None:
+    raw = b"\x00sig\xff"
+    stored = base64.b64encode(raw).decode("ascii")
+    _system, contents = internal_to_gemini(
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "name": "demo.echo",
+                        "args": {"text": "hi"},
+                        "provider_state": {"thought_signature": stored},
+                    }
+                ],
+            }
+        ]
+    )
+    parts = contents[0]["parts"]
+    assert isinstance(parts, list)
+    part = parts[0]
+    assert isinstance(part, dict)
+    assert part["thought_signature"] == raw
+
+
 def test_provider_state_round_trip() -> None:
     captured: list[dict[str, object]] = []
 
@@ -276,6 +306,54 @@ def test_provider_state_round_trip() -> None:
     asyncio.run(_run())
 
 
+def test_gemini_error_log_redacts_key_and_keeps_raised_safe(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="atlas_agent")
+    fake_key = "AIzaSyFakeTestKeyValue0000000000000"
+    exc = _err("ClientError", 400)
+    exc.status = "INVALID_ARGUMENT"  # type: ignore[attr-defined]
+    exc.message = f"Unknown field in request {fake_key}"  # type: ignore[attr-defined]
+    raised = _translate_gemini_error(exc)
+    assert isinstance(raised, LLMBadRequest)
+    assert str(raised) == "Gemini rejected the request"
+    assert "Unknown field" not in str(raised)
+    assert fake_key not in caplog.text
+    assert "AIza" not in caplog.text
+    assert "[redacted]" in caplog.text
+    assert "INVALID_ARGUMENT" in caplog.text
+    assert "400" in caplog.text
+
+
+def test_parse_retry_duration_tokens() -> None:
+    assert parse_retry_duration("2h21m49.85s") == pytest.approx(8509.85)
+    assert parse_retry_duration("37s") == pytest.approx(37.0)
+    assert parse_retry_duration("1m5s") == pytest.approx(65.0)
+    assert parse_retry_duration("nope") is None
+
+
+def test_gemini_429_retry_after_from_message_and_retry_delay() -> None:
+    from_message = _err("ClientError", 429)
+    from_message.message = "Please retry in 2h21m49.85s"  # type: ignore[attr-defined]
+    assert _retry_after_s(from_message) == pytest.approx(8509.85)
+    mapped = _translate_gemini_error(from_message)
+    assert isinstance(mapped, LLMRateLimited)
+    assert mapped.retry_after_s == pytest.approx(8509.85)
+
+    from_delay = _err("ClientError", 429)
+    from_delay.details = {  # type: ignore[attr-defined]
+        "error": {
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "37s"}],
+        }
+    }
+    assert _retry_after_s(from_delay) == pytest.approx(37.0)
+
+    unknown = _err("ClientError", 429)
+    unknown.message = "quota exceeded"  # type: ignore[attr-defined]
+    assert _retry_after_s(unknown) is None
+
+
 def test_gemini_error_mapping_and_retry() -> None:
     assert isinstance(_translate_gemini_error(_err("ClientError", 401)), LLMAuthError)
     assert isinstance(_translate_gemini_error(_err("ClientError", 429)), LLMRateLimited)
@@ -335,12 +413,13 @@ def test_specs_encode_names() -> None:
 
 
 def _live_gemini() -> tuple[GeminiProvider, list[dict[str, object]]]:
-    if os.environ.get("ATLAS_LIVE_TESTS") != "1" or not os.environ.get("GEMINI_API_KEY"):
-        pytest.skip("live Gemini tests disabled")
     from atlas_agent.config import load_settings
     from atlas_agent.tools.registry import ToolRegistry
 
-    return GeminiProvider(load_settings()), ToolRegistry.load().specs()
+    settings = load_settings()
+    if os.environ.get("ATLAS_LIVE_TESTS") != "1" or not settings.gemini_api_key:
+        pytest.skip("live Gemini tests disabled")
+    return GeminiProvider(settings), ToolRegistry.load().specs()
 
 
 @pytest.mark.live

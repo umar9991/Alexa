@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from atlas_agent.config import DEFAULT_GROQ_MODEL, Settings
+from atlas_agent.config import DEFAULT_GROQ_MODEL, Settings, load_settings
 from atlas_agent.llm.base import (
     AgentTurn,
     LLMAuthError,
@@ -200,6 +201,16 @@ def test_retry_after_honored_and_capped() -> None:
             await with_retry(op, sleep=sleep)
         assert sleeps == [20.0, 20.0]
 
+        long_calls = {"n": 0}
+
+        async def long_wait() -> str:
+            long_calls["n"] += 1
+            raise LLMRateLimited("daily", retry_after_s=120)
+
+        with pytest.raises(LLMRateLimited):
+            await with_retry(long_wait, sleep=sleep)
+        assert long_calls["n"] == 1
+
     asyncio.run(_run())
 
 
@@ -266,6 +277,25 @@ def test_timeout_and_5xx_are_retried_via_provider() -> None:
     asyncio.run(_run())
 
 
+def test_groq_error_log_redacts_key_and_keeps_raised_safe(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="atlas_agent")
+    fake_key = "gsk_abcdefghijklmnopqrstuvwxyz012345"
+    exc = _status_error("BadRequestError", 400)
+    exc.message = f"invalid request {fake_key}"  # type: ignore[attr-defined]
+    exc.body = {"error": {"message": f"invalid request {fake_key}", "type": "invalid_request_error"}}
+    raised = _translate_groq_error(exc)
+    assert isinstance(raised, LLMBadRequest)
+    assert str(raised) == "Groq rejected the request"
+    assert "invalid request" not in str(raised)
+    assert fake_key not in caplog.text
+    assert "gsk_" not in caplog.text
+    assert "[redacted]" in caplog.text
+    assert "invalid_request_error" in caplog.text
+    assert "400" in caplog.text
+
+
 def test_provider_maps_status_codes() -> None:
     assert isinstance(_translate_groq_error(_status_error("AuthenticationError", 401)), LLMAuthError)
     assert isinstance(_translate_groq_error(_status_error("RateLimitError", 429)), LLMRateLimited)
@@ -318,14 +348,47 @@ def test_factory_chain_unknown_and_gemini_lazy() -> None:
     asyncio.run(_run())
 
 
+def test_empty_base_urls_match_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GROQ_BASE_URL", "")
+    monkeypatch.setenv("GEMINI_BASE_URL", "")
+    settings = load_settings()
+    assert settings.groq_base_url is None
+    assert settings.gemini_base_url is None
+    groq = GroqProvider(_settings(groq_base_url=None))
+    groq_client = groq._ensure_client()
+    assert "api.groq.com" in str(groq_client.base_url)
+    gemini = GeminiProvider(
+        _settings(
+            llm_provider="gemini",
+            groq_api_key="",
+            gemini_api_key="test-key",
+            gemini_base_url=None,
+        )
+    )
+    gemini._ensure_client()
+    owned = gemini._owned_client
+    assert owned is not None
+    http_options = owned._api_client._http_options  # type: ignore[attr-defined]
+    assert "generativelanguage.googleapis.com" in str(http_options.base_url)
+
+
+def test_whitespace_env_is_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GROQ_BASE_URL", "   ")
+    monkeypatch.setenv("GEMINI_BASE_URL", "\t")
+    monkeypatch.setenv("GROQ_MODEL", "  llama-x  ")
+    settings = load_settings()
+    assert settings.groq_base_url is None
+    assert settings.gemini_base_url is None
+    assert settings.groq_model == "llama-x"
+
+
 @pytest.mark.live
 def test_live_groq_echo_parses() -> None:
-    if os.environ.get("ATLAS_LIVE_TESTS") != "1" or not os.environ.get("GROQ_API_KEY"):
-        pytest.skip("live Groq tests disabled")
-    from atlas_agent.config import load_settings
     from atlas_agent.tools.registry import ToolRegistry
 
     settings = load_settings()
+    if os.environ.get("ATLAS_LIVE_TESTS") != "1" or not settings.groq_api_key:
+        pytest.skip("live Groq tests disabled")
     provider = GroqProvider(settings)
     registry = ToolRegistry.load()
 

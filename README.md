@@ -59,7 +59,7 @@ GEMINI_MODEL=gemini-2.5-flash
 
 Groq rate-limit or unavailability falls back to Gemini automatically. Auth and bad-request errors do not fall back. Optional `GROQ_BASE_URL` and `GEMINI_BASE_URL` override endpoints.
 
-Restart the backend after changing `.env`. Live API tests (skipped by default):
+Restart the backend after changing `.env`. Dev probe (prints HTTP status and a redacted API message only): `python scripts/gemini_probe.py` (`--one-tool`, `--roundtrip`). Live API tests (skipped by default):
 
 ```powershell
 $env:ATLAS_LIVE_TESTS="1"

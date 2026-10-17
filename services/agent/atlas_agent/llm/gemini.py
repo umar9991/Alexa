@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-from atlas_agent.config import Settings
+from atlas_agent.config import Settings, env_text
 from atlas_agent.llm.base import (
     AgentTurn,
     LLMAuthError,
@@ -15,6 +16,7 @@ from atlas_agent.llm.base import (
     LLMUnavailable,
     ToolCall,
 )
+from atlas_agent.llm.diag import log_provider_api_error
 from atlas_agent.llm.names import (
     decode_tool_name,
     encode_tool_name,
@@ -160,6 +162,7 @@ class GeminiProvider:
     ) -> None:
         self._settings = settings
         self._client = client
+        self._owned_client: object | None = None
         self._sleep = sleep
 
     async def step(
@@ -203,16 +206,23 @@ class GeminiProvider:
         from google import genai
         from google.genai import types
 
+        env_text("GEMINI_BASE_URL")
+        env_text("GOOGLE_GEMINI_BASE_URL")
+        env_text("GEMINI_API_KEY")
+        env_text("GOOGLE_API_KEY")
         http_kwargs: dict[str, object] = {
             "timeout": int(self._settings.llm_timeout_s * 1000),
             "retry_options": types.HttpRetryOptions(attempts=1),
+            "base_url": self._settings.gemini_base_url,
         }
-        if self._settings.gemini_base_url:
-            http_kwargs["base_url"] = self._settings.gemini_base_url
         real = genai.Client(
             api_key=self._settings.gemini_api_key,
             http_options=types.HttpOptions(**http_kwargs),
         )
+        # aio.models is not enough: Client.__del__ closes the HTTP session,
+        # and a later step then raises "Cannot send a request, as the client
+        # has been closed."
+        self._owned_client = real
         self._client = real.aio.models
         return self._client
 
@@ -243,7 +253,7 @@ def _assistant_content(message: dict[str, object]) -> dict[str, object]:
             if isinstance(state, dict):
                 signature = state.get("thought_signature")
             if isinstance(signature, str) and signature:
-                part["thought_signature"] = signature
+                part["thought_signature"] = _replay_thought_signature(signature)
             elif isinstance(signature, (bytes, bytearray)) and signature:
                 part["thought_signature"] = bytes(signature)
             else:
@@ -252,6 +262,18 @@ def _assistant_content(message: dict[str, object]) -> dict[str, object]:
     if not parts:
         parts.append({"text": ""})
     return {"role": "model", "parts": parts}
+
+
+def _replay_thought_signature(stored: str) -> str | bytes:
+    if stored == SKIP_THOUGHT_SIGNATURE:
+        return stored
+    try:
+        decoded = base64.b64decode(stored, validate=True)
+    except (ValueError, TypeError):
+        return stored
+    if base64.b64encode(decoded).decode("ascii") != stored:
+        return stored
+    return decoded
 
 
 def _tool_part(message: dict[str, object]) -> dict[str, object]:
@@ -322,6 +344,7 @@ def _parse_args(raw: object) -> tuple[dict[str, object], str | None]:
 def _translate_gemini_error(exc: Exception) -> Exception:
     if isinstance(exc, LLMError):
         return exc
+    log_provider_api_error("gemini", exc)
     name = type(exc).__name__
     code = getattr(exc, "code", None)
     if code is None:
@@ -354,7 +377,34 @@ def _translate_gemini_error(exc: Exception) -> Exception:
     return LLMUnavailable("Gemini is temporarily unavailable")
 
 
+_RETRY_IN = re.compile(r"retry in\s+([0-9hms.]+)", re.IGNORECASE)
+_DURATION = re.compile(
+    r"^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?$",
+    re.IGNORECASE,
+)
+
+
+def parse_retry_duration(text: str) -> float | None:
+    match = _DURATION.fullmatch(text.strip())
+    if match is None or not any(match.groups()):
+        return None
+    hours = float(match.group(1) or 0)
+    minutes = float(match.group(2) or 0)
+    seconds = float(match.group(3) or 0)
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def _retry_after_s(exc: Exception) -> float | None:
+    delay = _retry_delay_from_details(getattr(exc, "details", None))
+    if delay is not None:
+        return delay
+    message = getattr(exc, "message", None)
+    if isinstance(message, str):
+        found = _RETRY_IN.search(message)
+        if found is not None:
+            parsed = parse_retry_duration(found.group(1))
+            if parsed is not None:
+                return parsed
     response = getattr(exc, "response", None)
     if response is None:
         return None
@@ -364,7 +414,40 @@ def _retry_after_s(exc: Exception) -> float | None:
     raw = headers.get("retry-after") or headers.get("Retry-After")
     if raw is None:
         return None
+    if isinstance(raw, str):
+        parsed = parse_retry_duration(raw) or _float_or_none(raw)
+        return parsed
+    return _float_or_none(raw)
+
+
+def _retry_delay_from_details(details: object) -> float | None:
+    if isinstance(details, dict):
+        raw = details.get("retryDelay") or details.get("retry_delay")
+        if isinstance(raw, str):
+            parsed = parse_retry_duration(raw)
+            if parsed is not None:
+                return parsed
+        nested = details.get("error")
+        if nested is not None:
+            found = _retry_delay_from_details(nested)
+            if found is not None:
+                return found
+        nested_details = details.get("details")
+        if nested_details is not None:
+            found = _retry_delay_from_details(nested_details)
+            if found is not None:
+                return found
+        return None
+    if isinstance(details, list):
+        for item in details:
+            found = _retry_delay_from_details(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _float_or_none(raw: object) -> float | None:
     try:
-        return float(raw)
+        return float(raw)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None

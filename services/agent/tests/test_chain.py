@@ -110,7 +110,7 @@ def test_chain_cooldown_retry_after_and_all_failed(caplog: pytest.LogCaptureFixt
         )
         gemini = FakeProvider(
             name="gemini",
-            outcomes=[AgentTurn(text="g1"), AgentTurn(text="g2")],
+            outcomes=[AgentTurn(text="g1"), AgentTurn(text="g2"), AgentTurn(text="g2")],
             calls=calls,
         )
         chain = ChainProvider([("groq", groq), ("gemini", gemini)], cooldown_s=60, clock=clock)
@@ -126,7 +126,12 @@ def test_chain_cooldown_retry_after_and_all_failed(caplog: pytest.LogCaptureFixt
         assert calls == ["gemini"]
 
         calls.clear()
-        now["t"] = 121.0
+        now["t"] = 199.0
+        assert (await chain.step([], [])).text == "g2"
+        assert calls == ["gemini"]
+
+        calls.clear()
+        now["t"] = 200.0
         groq._outcomes.insert(0, AgentTurn(text="g-ok"))
         assert (await chain.step([], [])).text == "g-ok"
         assert calls == ["groq"]
@@ -178,7 +183,7 @@ def test_chain_retry_after_capped() -> None:
                     "groq",
                     FakeProvider(
                         name="groq",
-                        outcomes=[LLMRateLimited("r", retry_after_s=500), AgentTurn(text="late")],
+                        outcomes=[LLMRateLimited("r", retry_after_s=5000), AgentTurn(text="late")],
                         calls=calls,
                     ),
                 ),
@@ -194,11 +199,11 @@ def test_chain_retry_after_capped() -> None:
             clock=lambda: now["t"],
         )
         assert (await chain.step([], [])).text == "now"
-        now["t"] = 119.0
+        now["t"] = 3599.0
         calls.clear()
         assert (await chain.step([], [])).text == "now"
         assert calls == ["gemini"]
-        now["t"] = 120.0
+        now["t"] = 3600.0
         calls.clear()
         assert (await chain.step([], [])).text == "late"
         assert calls == ["groq"]

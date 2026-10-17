@@ -8,6 +8,7 @@ from atlas_agent.llm.base import LLMRateLimited, LLMUnavailable
 MAX_ATTEMPTS = 3
 BACKOFF_S = (1.0, 2.0, 4.0)
 MAX_RETRY_AFTER_S = 20.0
+LONG_RETRY_AFTER_S = 60.0
 
 
 async def with_retry[T](
@@ -24,6 +25,12 @@ async def with_retry[T](
         except (LLMRateLimited, LLMUnavailable) as exc:
             last_error = exc
             if attempt >= max_attempts - 1:
+                raise
+            if (
+                isinstance(exc, LLMRateLimited)
+                and exc.retry_after_s is not None
+                and exc.retry_after_s > LONG_RETRY_AFTER_S
+            ):
                 raise
             await sleeper(_delay_s(exc, attempt))
     assert last_error is not None

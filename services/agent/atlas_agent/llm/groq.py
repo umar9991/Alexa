@@ -4,7 +4,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
-from atlas_agent.config import Settings
+from atlas_agent.config import Settings, env_text
 from atlas_agent.llm.base import (
     AgentTurn,
     LLMAuthError,
@@ -14,6 +14,7 @@ from atlas_agent.llm.base import (
     LLMUnavailable,
     ToolCall,
 )
+from atlas_agent.llm.diag import log_provider_api_error
 from atlas_agent.llm.names import (
     decode_tool_name,
     encode_tool_name,
@@ -122,14 +123,14 @@ class GroqProvider:
             raise LLMAuthError("GROQ_API_KEY is missing or invalid")
         from groq import AsyncGroq
 
-        kwargs: dict[str, object] = {
-            "api_key": self._settings.groq_api_key,
-            "max_retries": 0,
-            "timeout": self._settings.llm_timeout_s,
-        }
-        if self._settings.groq_base_url:
-            kwargs["base_url"] = self._settings.groq_base_url
-        self._client = AsyncGroq(**kwargs)
+        env_text("GROQ_BASE_URL")
+        env_text("GROQ_API_KEY")
+        self._client = AsyncGroq(
+            api_key=self._settings.groq_api_key,
+            base_url=self._settings.groq_base_url,
+            max_retries=0,
+            timeout=self._settings.llm_timeout_s,
+        )
         return self._client
 
 
@@ -212,6 +213,7 @@ def _parse_tool_call(item: Any) -> ToolCall:
 def _translate_groq_error(exc: Exception) -> Exception:
     if isinstance(exc, LLMError):
         return exc
+    log_provider_api_error("groq", exc)
     name = type(exc).__name__
     status = getattr(exc, "status_code", None)
     if name in {"AuthenticationError", "PermissionDeniedError"} or status in {401, 403}:

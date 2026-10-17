@@ -15,7 +15,7 @@ from atlas_agent.llm.base import (
 )
 
 logger = logging.getLogger("atlas_agent")
-MAX_COOLDOWN_S = 120.0
+MAX_COOLDOWN_S = 3600.0
 
 
 class ChainProvider:
