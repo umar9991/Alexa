@@ -28,6 +28,7 @@ def test_registry_loads_demo_tools() -> None:
         "fs.move",
         "fs.delete",
         "fs.overwrite_text",
+        "docx.build",
     }
     assert registry.get("fs.move") is not None
     assert registry.get("fs.move").spec.tier is Tier.T1  # type: ignore[union-attr]

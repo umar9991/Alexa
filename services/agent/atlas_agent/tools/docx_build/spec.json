@@ -1,0 +1,136 @@
+{
+  "name": "docx.build",
+  "description": "Create a new Word assignment (.docx) in the workspace from structured JSON. Create-only: never overwrites. Path is relative and must end with .docx.",
+  "tier": "T1",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "path": { "type": "string" },
+      "page_size": { "type": "string", "enum": ["letter", "a4"], "default": "letter" },
+      "meta": {
+        "type": "object",
+        "properties": {
+          "student_name": { "type": "string", "maxLength": 2000 },
+          "student_id": { "type": "string", "maxLength": 2000 },
+          "instructor": { "type": "string", "maxLength": 2000 },
+          "subject": { "type": "string", "maxLength": 2000 },
+          "deadline": { "type": "string", "maxLength": 2000 },
+          "total_marks": { "type": "string", "maxLength": 2000 },
+          "assignment_number": { "type": "integer" },
+          "university": { "type": "string", "maxLength": 2000 },
+          "department": { "type": "string", "maxLength": 2000 },
+          "university_short": { "type": "string", "maxLength": 2000 }
+        },
+        "required": [
+          "student_name",
+          "student_id",
+          "instructor",
+          "subject",
+          "deadline",
+          "total_marks",
+          "assignment_number"
+        ],
+        "additionalProperties": false
+      },
+      "questions": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 30,
+        "items": {
+          "type": "object",
+          "properties": {
+            "number": { "type": "string", "maxLength": 2000 },
+            "title": { "type": "string", "maxLength": 2000 },
+            "marks": { "type": ["integer", "null"] },
+            "blocks": {
+              "type": "array",
+              "items": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "paragraph" },
+                      "text": { "type": "string", "maxLength": 2000 }
+                    },
+                    "required": ["type", "text"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "labeled" },
+                      "label": { "type": "string", "maxLength": 2000 },
+                      "text": { "type": "string", "maxLength": 2000 }
+                    },
+                    "required": ["type", "label", "text"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "bullets" },
+                      "items": {
+                        "type": "array",
+                        "items": { "type": "string", "maxLength": 2000 }
+                      }
+                    },
+                    "required": ["type", "items"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "table" },
+                      "headers": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 6,
+                        "items": { "type": "string", "maxLength": 2000 }
+                      },
+                      "rows": {
+                        "type": "array",
+                        "maxItems": 30,
+                        "items": {
+                          "type": "array",
+                          "maxItems": 6,
+                          "items": { "type": "string", "maxLength": 2000 }
+                        }
+                      },
+                      "tones": {
+                        "type": "array",
+                        "maxItems": 30,
+                        "items": {
+                          "type": "array",
+                          "maxItems": 6,
+                          "items": {
+                            "type": "string",
+                            "enum": ["none", "good", "warn", "info", "bad"]
+                          }
+                        }
+                      }
+                    },
+                    "required": ["type", "headers", "rows"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": { "const": "code" },
+                      "text": { "type": "string", "maxLength": 4000 }
+                    },
+                    "required": ["type", "text"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "required": ["number", "title", "blocks"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["path", "meta", "questions"],
+    "additionalProperties": false
+  }
+}

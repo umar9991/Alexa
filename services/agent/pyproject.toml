@@ -15,6 +15,7 @@ dependencies = [
     "jsonschema==4.26.0",
     "groq==1.7.0",
     "google-genai==1.52.0",
+    "python-docx==1.2.0",
 ]
 
 [project.optional-dependencies]
