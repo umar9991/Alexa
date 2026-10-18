@@ -77,4 +77,6 @@ Read-only scan of your Moodle LMS through a saved browser session. Once, run `pl
 1. Ask Atlas "log in to my LMS" once. `lms.login` (T1) opens a visible window; you sign in yourself, including 2FA. Atlas types nothing and stores no credentials.
 2. Then ask "scan my LMS for assignments and quizzes". `lms.scan` (T0) lists each assignment and quiz with course, name, URL and due text. If the session expired it says so; run `lms.login` again.
 
+3. Ask "show me the details of <assignment name>". `lms.assignment_detail` (T0) opens that one assignment or quiz page, using the URL from the scan result, and returns title, due and opened text, submission and grading status, description, attachment links and, for quizzes, time limit and attempts. It only accepts `/mod/assign/view.php?id=N` and `/mod/quiz/view.php?id=N` on your LMS host, never clicks or downloads, and its selectors target standard Moodle 4.x markup and were only tested against a fixture.
+
 Navigation is limited to the LMS host and Microsoft sign-in hosts. `data/browser-profile` holds a live login session: never commit or share it.
