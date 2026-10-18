@@ -6,12 +6,13 @@ from atlas_agent.llm.base import AgentTurn, ToolCall
 
 
 class ScriptedProvider:
+    """Test-only provider. Must be enabled explicitly with ATLAS_LLM_PROVIDER=scripted."""
+
     async def step(self, messages: list[dict[str, object]], tools: list[dict[str, object]]) -> AgentTurn:
         del tools
-        tool_result = _last_tool_message(messages)
-        if tool_result is not None:
-            summary = _short_summary(tool_result)
-            return AgentTurn(text=f"Done: {summary}", tool_calls=[])
+        tool_message = _last_tool_message(messages)
+        if tool_message is not None:
+            return AgentTurn(text=_final_text(tool_message), tool_calls=[])
         user_text = _last_user_text(messages)
         if "danger" in user_text:
             return AgentTurn(
@@ -28,20 +29,25 @@ def _last_user_text(messages: list[dict[str, object]]) -> str:
     return ""
 
 
-def _last_tool_message(messages: list[dict[str, object]]) -> str | None:
+def _last_tool_message(messages: list[dict[str, object]]) -> dict[str, object] | None:
     for message in reversed(messages):
         if message.get("role") == "tool":
-            content = message.get("content", "")
-            return content if isinstance(content, str) else str(content)
+            return message
     return None
 
 
-def _short_summary(content: str) -> str:
-    try:
-        parsed = json.loads(content)
-        content = json.dumps(parsed, separators=(",", ":"))
-    except json.JSONDecodeError:
-        pass
-    if len(content) <= 120:
-        return content
-    return content[:117] + "..."
+def _final_text(tool_message: dict[str, object]) -> str:
+    """A short sentence about the outcome. Never the raw tool JSON."""
+    name = tool_message.get("name", "the tool")
+    label = name if isinstance(name, str) and name else "the tool"
+    content = tool_message.get("content", "")
+    ok = False
+    if isinstance(content, str):
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError:
+            parsed = None
+        ok = isinstance(parsed, dict) and parsed.get("ok") is True
+    if ok:
+        return f"Done: {label} completed."
+    return f"Done: {label} did not complete."

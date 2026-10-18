@@ -47,7 +47,9 @@ python scripts/ws_demo.py "danger delete everything"
 
 ## LLM provider
 
-Copy `.env.example` to `.env`. Default `ATLAS_LLM_PROVIDER=scripted` needs no key. Set `ATLAS_LLM_PROVIDER` to one name or a comma-separated chain (`groq`, `gemini`, or `groq,gemini`). Model names come from `GROQ_MODEL` / `GEMINI_MODEL`. Missing keys fail only when a run starts.
+Copy `.env.example` to `.env`. `ATLAS_LLM_PROVIDER` is required: set it to one name or a comma-separated fallback chain (`groq`, `gemini`, or `groq,gemini`). If it is unset or empty the backend refuses to start and lists the valid values. `scripted` is a test-only provider (it answers every message by calling `demo.echo`) and is never a default; set `ATLAS_LLM_PROVIDER=scripted` explicitly if you want it, for example with `scripts/ws_demo.py`. Model names come from `GROQ_MODEL` / `GEMINI_MODEL`. Missing keys fail only when a run starts.
+
+At startup the backend logs the resolved chain (for example `LLM chain: groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite`), and `GET /health` returns the same list in its `llm` field (`scripted:test-only` for the scripted provider). Restart the backend after editing `.env`; a real environment variable in the shell overrides `.env`. Set `ATLAS_LLM_DEBUG=1` to log one metadata line per LLM step (provider, model, finish reason, whether text was present, tool-call names; never content, arguments or keys).
 
 ```
 ATLAS_LLM_PROVIDER=groq,gemini

@@ -33,6 +33,7 @@ class Settings:
     gemini_model: str = ""
     groq_base_url: str | None = None
     gemini_base_url: str | None = None
+    llm_debug: bool = False
 
 
 def env_text(name: str) -> str | None:
@@ -54,7 +55,7 @@ def load_settings() -> Settings:
     groq_model = env_text("GROQ_MODEL") or DEFAULT_GROQ_MODEL
     gemini_model = env_text("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
     return Settings(
-        llm_provider=env_text("ATLAS_LLM_PROVIDER") or "scripted",
+        llm_provider=env_text("ATLAS_LLM_PROVIDER") or "",
         groq_api_key=env_text("GROQ_API_KEY") or "",
         groq_model=groq_model,
         llm_timeout_s=_float_env("ATLAS_LLM_TIMEOUT_S", DEFAULT_TIMEOUT_S),
@@ -65,6 +66,7 @@ def load_settings() -> Settings:
         gemini_model=gemini_model,
         groq_base_url=env_text("GROQ_BASE_URL"),
         gemini_base_url=env_text("GEMINI_BASE_URL"),
+        llm_debug=_bool_env("ATLAS_LLM_DEBUG", default=False),
     )
 
 

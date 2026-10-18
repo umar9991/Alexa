@@ -23,7 +23,7 @@ from atlas_agent.core.events import (
     ToolResult,
 )
 from atlas_agent.core.policy import Decision, Tier, decide
-from atlas_agent.core.prompts import SYSTEM_PROMPT
+from atlas_agent.core.prompts import FINAL_ANSWER_REQUEST, SYSTEM_PROMPT
 from atlas_agent.llm.base import (
     LLMError,
     LLMProvider,
@@ -66,6 +66,8 @@ async def run_agent(
         {"role": "user", "content": task},
     ]
     tools = registry.specs()
+    tools_run: list[str] = []
+    asked_for_final = False
 
     for _step in range(max_steps):
         if _cancelled(cancel_event):
@@ -79,13 +81,24 @@ async def run_agent(
         if _cancelled(cancel_event):
             await emit(_finished(run_id, "cancelled", "cancelled"))
             return
-        if turn.text:
-            await emit(AssistantMessage(run_id=run_id, ts=utc_now(), text=turn.text))
+        has_text = bool(turn.text and turn.text.strip())
+        if has_text:
+            await emit(AssistantMessage(run_id=run_id, ts=utc_now(), text=str(turn.text)))
         if not turn.tool_calls:
-            summary = turn.text if turn.text else "done"
-            await emit(_finished(run_id, "done", summary))
+            if has_text or not tools_run:
+                await emit(_finished(run_id, "done", str(turn.text) if has_text else "done"))
+                return
+            if not asked_for_final:
+                asked_for_final = True
+                logger.warning("model returned no text after tool results; asking once more")
+                messages.append({"role": "user", "content": FINAL_ANSWER_REQUEST})
+                continue
+            neutral = _neutral_final(tools_run)
+            await emit(AssistantMessage(run_id=run_id, ts=utc_now(), text=neutral))
+            await emit(_finished(run_id, "done", neutral))
             return
         prepared = _with_call_ids(turn.tool_calls)
+        tools_run.extend(call.name for call in prepared)
         messages.append(_assistant_record(turn.text, prepared))
         for call in prepared:
             if _cancelled(cancel_event):
@@ -109,6 +122,12 @@ async def run_agent(
                 return
 
     await emit(_finished(run_id, "failed", "max steps reached"))
+
+
+def _neutral_final(tools_run: list[str]) -> str:
+    """Short fallback message. Names only; never tool output."""
+    unique = list(dict.fromkeys(tools_run))
+    return f"Done. Ran {', '.join(unique)}."
 
 
 def _cancelled(cancel_event: asyncio.Event | None) -> bool:

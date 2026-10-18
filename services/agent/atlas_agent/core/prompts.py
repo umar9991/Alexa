@@ -10,3 +10,8 @@ SYSTEM_PROMPT = (
     "Deleting never destroys data: it moves items to _trash. "
     "Ask before bulk reorganization; if the user rejects an action, do not retry it."
 )
+
+FINAL_ANSWER_REQUEST = (
+    "Give a short final answer for the user based on the tool results above. "
+    "Do not call any tool."
+)

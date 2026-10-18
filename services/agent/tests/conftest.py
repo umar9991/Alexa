@@ -17,6 +17,11 @@ from atlas_agent.llm.base import AgentTurn, LLMProvider, ToolCall
 from atlas_agent.llm.scripted import ScriptedProvider
 from atlas_agent.tools.registry import ToolRegistry
 
+# The scripted provider is opt-in, never a default. The test suite enables it explicitly,
+# before any test module imports atlas_agent.main (which builds the provider at import).
+# A real shell variable or a developer's .env can then never switch tests to a live LLM.
+os.environ["ATLAS_LLM_PROVIDER"] = "scripted"
+
 
 class RecordingEmitter:
     def __init__(self) -> None:

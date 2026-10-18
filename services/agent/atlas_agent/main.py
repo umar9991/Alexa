@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError
 
 from atlas_agent import __version__
-from atlas_agent.config import ensure_workspace, load_settings
+from atlas_agent.config import Settings, ensure_workspace, load_settings
 from atlas_agent.core.audit import AuditLog
 from atlas_agent.core.events import (
     AgentEvent,
@@ -19,7 +20,12 @@ from atlas_agent.core.events import (
     UserMessage,
 )
 from atlas_agent.core.loop import run_agent
-from atlas_agent.llm.factory import build_provider
+from atlas_agent.llm.base import LLMProvider
+from atlas_agent.llm.factory import (
+    ProviderConfigError,
+    build_provider,
+    describe_provider_chain,
+)
 from atlas_agent.tools.registry import ToolRegistry
 
 app = FastAPI(title="atlas")
@@ -31,15 +37,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _configure_logging() -> None:
+    """Make atlas_agent INFO lines visible under uvicorn (it only wires its own loggers)."""
+    logger = logging.getLogger("atlas_agent")
+    if logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
+
+def _start_llm(settings: Settings) -> tuple[LLMProvider, list[str]]:
+    try:
+        chain = describe_provider_chain(settings)
+        provider = build_provider(settings)
+    except ProviderConfigError as exc:
+        raise SystemExit(f"atlas: cannot start: {exc}") from None
+    return provider, chain
+
+
+_configure_logging()
 _settings = load_settings()
 _workspace = ensure_workspace(_settings.workspace)
 _registry = ToolRegistry.load()
-_provider = build_provider(_settings)
+_provider, _llm_chain = _start_llm(_settings)
+logging.getLogger("atlas_agent").info("LLM chain: %s", ", ".join(_llm_chain))
+if _settings.llm_debug:
+    logging.getLogger("atlas_agent").info("LLM step debug logging is on (metadata only)")
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok", "name": "atlas", "version": __version__}
+async def health() -> dict[str, object]:
+    return {"status": "ok", "name": "atlas", "version": __version__, "llm": _llm_chain}
 
 
 class ConnectionSession:
