@@ -1,0 +1,12 @@
+{
+  "name": "lms.login",
+  "description": "Open a visible browser window on the LMS login page so the user can sign in manually (including 2FA). Atlas types nothing. Saves the session in the local browser profile. Returns when the LMS dashboard is reached.",
+  "tier": "T1",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "timeout_s": { "type": "integer", "minimum": 1, "maximum": 300, "default": 180 }
+    },
+    "additionalProperties": false
+  }
+}

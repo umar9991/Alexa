@@ -69,3 +69,12 @@ pytest -q -m live
 ## Workspace tools
 
 Set `ATLAS_WORKSPACE` in `.env` to an absolute folder (for example `D:\Atlas\workspace`). On startup the backend creates that folder and `_trash/` if needed. File tools only work inside it, using relative paths. `fs.list` / `fs.read_text` are T0; `fs.make_dir` / `fs.write_text` (create-only) / `fs.move` / `docx.build` (create-only `.docx` assignment) are T1; `fs.delete` and `fs.overwrite_text` are T2 and always need approval. Delete and overwrite move the previous data to `_trash/<id>/<original path>` and append `_trash/.index.jsonl`; `_trash` is never purged automatically. Restore by moving out of `_trash`. Optional `describe` hooks are read-only and must not change disk. Symlinks and directory junctions inside the workspace are rejected; the workspace root itself may be a link and is resolved once at startup. If `ATLAS_WORKSPACE` is empty, those tools fail with `workspace is not configured`.
+
+## LMS
+
+Read-only scan of your Moodle LMS through a saved browser session. Once, run `playwright install chromium`, then set `LMS_BASE_URL` (an https site root) in `.env` and restart the backend. Optional: `ATLAS_BROWSER_PROFILE` (must be inside `data/`) and `LMS_HEADLESS` (default `true`, used by `lms.scan` only).
+
+1. Ask Atlas "log in to my LMS" once. `lms.login` (T1) opens a visible window; you sign in yourself, including 2FA. Atlas types nothing and stores no credentials.
+2. Then ask "scan my LMS for assignments and quizzes". `lms.scan` (T0) lists each assignment and quiz with course, name, URL and due text. If the session expired it says so; run `lms.login` again.
+
+Navigation is limited to the LMS host and Microsoft sign-in hosts. `data/browser-profile` holds a live login session: never commit or share it.

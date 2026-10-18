@@ -1,0 +1,10 @@
+{
+  "name": "lms.scan",
+  "description": "Read-only scan of the LMS using the saved login session. Lists assignments and quizzes per course with name, URL and due text. Requires a prior lms.login.",
+  "tier": "T0",
+  "input_schema": {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": false
+  }
+}
