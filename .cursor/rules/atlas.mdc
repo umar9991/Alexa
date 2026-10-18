@@ -1,0 +1,12 @@
+---
+description: Atlas project rules
+alwaysApply: true
+---
+
+Always read and follow `AGENTS.md` in the repo root before writing any code.
+
+- Do only the step requested. No extra features, tools, or refactors.
+- Touch only the files the prompt lists. If another file must change, stop and explain.
+- Never auto-approve T2 (irreversible) actions. Never hardcode keys or model names.
+- Check current library docs before using an API. Do not guess request formats.
+- Add tests, run them, and finish with: what changed, how to run, how to test, what is left.

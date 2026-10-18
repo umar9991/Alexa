@@ -4,7 +4,7 @@ import importlib.util
 import json
 import logging
 import unicodedata
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +15,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from atlas_agent.core.policy import Tier
 from atlas_agent.tools.context import ToolContext, ToolError
+from atlas_agent.tools.toolsets import ENABLE_TOOL_NAME, toolset_description, toolset_of
 
 logger = logging.getLogger("atlas_agent")
 
@@ -56,6 +57,8 @@ class ToolRegistry:
             if not spec_path.exists():
                 continue
             spec = _read_spec(spec_path)
+            if spec.name == ENABLE_TOOL_NAME:
+                raise ToolRegistryError(f"{ENABLE_TOOL_NAME} is a built-in tool name")
             if "__" in spec.name:
                 raise ToolRegistryError(
                     f"invalid tool name {spec.name}: names must not contain '__'"
@@ -74,6 +77,24 @@ class ToolRegistry:
 
     def specs(self) -> list[dict[str, object]]:
         return [tool.spec.model_dump(mode="json") for tool in self._tools.values()]
+
+    def toolsets(self) -> dict[str, str]:
+        """Toolset name to one-line description, only for toolsets with registered tools."""
+        names = sorted({toolset_of(name) for name in self._tools})
+        return {name: toolset_description(name) for name in names}
+
+    def specs_for(self, toolsets: Collection[str]) -> list[dict[str, object]]:
+        """Full specs of the tools that belong to the given toolsets."""
+        return [
+            tool.spec.model_dump(mode="json")
+            for name, tool in self._tools.items()
+            if toolset_of(name) in toolsets
+        ]
+
+    def tools_in(self, toolsets: Collection[str]) -> list[ToolSpec]:
+        return [
+            tool.spec for name, tool in self._tools.items() if toolset_of(name) in toolsets
+        ]
 
     def validate_args(self, name: str, args: dict[str, object]) -> None:
         tool = self.get(name)
@@ -112,6 +133,17 @@ class ToolRegistry:
         except Exception:
             logger.exception("internal tool error in %s", name)
             raise ToolError("internal tool error") from None
+
+
+def discover_toolset_names(root: Path | None = None) -> list[str]:
+    """Toolset names found in spec.json files, without importing any handler."""
+    tools_root = root if root is not None else Path(__file__).resolve().parent
+    names: set[str] = set()
+    for child in tools_root.iterdir():
+        spec_path = child / "spec.json"
+        if child.is_dir() and spec_path.exists():
+            names.add(toolset_of(_read_spec(spec_path).name))
+    return sorted(names)
 
 
 def _read_spec(spec_path: Path) -> ToolSpec:

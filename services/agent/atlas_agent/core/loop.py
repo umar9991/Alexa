@@ -5,13 +5,15 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from jsonschema import ValidationError
+from jsonschema import ValidationError, validate
 
+from atlas_agent.config import always_on_toolsets_from_env, llm_debug_enabled
 from atlas_agent.core.audit import AuditLog
 from atlas_agent.core.events import (
     AgentEvent,
@@ -23,7 +25,7 @@ from atlas_agent.core.events import (
     ToolResult,
 )
 from atlas_agent.core.policy import Decision, Tier, decide
-from atlas_agent.core.prompts import FINAL_ANSWER_REQUEST, SYSTEM_PROMPT
+from atlas_agent.core.prompts import FINAL_ANSWER_REQUEST, build_system_prompt
 from atlas_agent.llm.base import (
     LLMError,
     LLMProvider,
@@ -33,12 +35,56 @@ from atlas_agent.llm.base import (
 from atlas_agent.llm.names import truncate_tool_content
 from atlas_agent.tools.context import ToolContext, ToolError
 from atlas_agent.tools.registry import ToolRegistry, ToolSpec, format_invalid_args
+from atlas_agent.tools.toolsets import (
+    ENABLE_TOOL_NAME,
+    MAX_ENABLE_CALLS,
+    MAX_ENABLE_TOOLSETS,
+    first_sentence,
+    toolset_of,
+)
 
 logger = logging.getLogger("atlas_agent")
 
 EmitFn = Callable[[AgentEvent], Awaitable[None]]
 ApprovalWaiter = Callable[[str], Awaitable[bool]]
 DecideFn = Callable[[ToolSpec | None, dict[str, object]], Decision]
+
+TOOLSET_NOT_ENABLED = "toolset not enabled; call tools.enable first"
+
+# Built-in meta tool. It has no tool folder: the loop handles it, but it still goes through
+# schema validation, policy, audit log and trace events like every other call.
+ENABLE_SPEC = ToolSpec(
+    name=ENABLE_TOOL_NAME,
+    description=(
+        "Enable toolsets so their tools become available. "
+        "Pass 1 to 4 toolset names from the toolset list."
+    ),
+    tier=Tier.T0,
+    input_schema={
+        "type": "object",
+        "properties": {
+            "toolsets": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": MAX_ENABLE_TOOLSETS,
+            }
+        },
+        "required": ["toolsets"],
+        "additionalProperties": False,
+    },
+)
+
+
+@dataclass
+class _RunState:
+    enabled: set[str]
+    enable_calls: int = 0
+
+
+def approx_tokens(tools: list[dict[str, object]]) -> int:
+    """Rough token estimate (characters / 4) of a tools payload."""
+    return len(json.dumps(tools, ensure_ascii=True)) // 4
 
 
 def utc_now() -> str:
@@ -59,20 +105,29 @@ async def run_agent(
     max_steps: int = 6,
     cancel_event: asyncio.Event | None = None,
     workspace: Path | None = None,
+    always_on_toolsets: Collection[str] | None = None,
 ) -> None:
     await emit(RunStarted(run_id=run_id, ts=utc_now(), task=task))
+    available = registry.toolsets()
     messages: list[dict[str, object]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt(available)},
         {"role": "user", "content": task},
     ]
-    tools = registry.specs()
+    initial = always_on_toolsets_from_env() if always_on_toolsets is None else always_on_toolsets
+    state = _RunState(enabled={name for name in initial if name in available})
     tools_run: list[str] = []
     asked_for_final = False
+    debug = llm_debug_enabled()
 
-    for _step in range(max_steps):
+    steps_used = 0
+    while steps_used < max_steps:
+        steps_used += 1
         if _cancelled(cancel_event):
             await emit(_finished(run_id, "cancelled", "cancelled"))
             return
+        tools = [ENABLE_SPEC.model_dump(mode="json"), *registry.specs_for(state.enabled)]
+        if debug:
+            logger.info("llm step tools_sent=%d approx_tokens=%d", len(tools), approx_tokens(tools))
         try:
             turn = await provider.step(messages, tools)
         except LLMError as exc:
@@ -116,12 +171,47 @@ async def run_agent(
                 cancel_event=cancel_event,
                 messages=messages,
                 workspace=workspace,
+                state=state,
             )
             if _cancelled(cancel_event):
                 await emit(_finished(run_id, "cancelled", "cancelled"))
                 return
+        if _only_enable_calls(prepared) and state.enable_calls <= MAX_ENABLE_CALLS:
+            steps_used -= 1  # tools.enable does not consume a step (its calls are capped)
 
     await emit(_finished(run_id, "failed", "max steps reached"))
+
+
+def _only_enable_calls(calls: list[ToolCall]) -> bool:
+    return all(call.name == ENABLE_TOOL_NAME for call in calls)
+
+
+def _enable_toolsets(
+    registry: ToolRegistry, state: _RunState, args: dict[str, object]
+) -> dict[str, object]:
+    if state.enable_calls > MAX_ENABLE_CALLS:
+        raise ToolError(f"{ENABLE_TOOL_NAME} limit reached ({MAX_ENABLE_CALLS} per run)")
+    raw = args.get("toolsets")
+    requested = [str(name) for name in raw] if isinstance(raw, list) else []
+    names = list(dict.fromkeys(requested))
+    available = registry.toolsets()
+    unknown = [name[:40] for name in names if name not in available]
+    if unknown:
+        raise ToolError(
+            f"unknown toolset: {', '.join(unknown)}. Known toolsets: {', '.join(available)}"
+        )
+    state.enabled.update(names)
+    return {
+        "enabled": names,
+        "tools": [
+            {
+                "name": spec.name,
+                "tier": spec.tier.value,
+                "description": first_sentence(spec.description),
+            }
+            for spec in registry.tools_in(names)
+        ],
+    }
 
 
 def _neutral_final(tools_run: list[str]) -> str:
@@ -153,11 +243,15 @@ async def _handle_tool_call(
     cancel_event: asyncio.Event | None,
     messages: list[dict[str, object]],
     workspace: Path | None,
+    state: _RunState,
 ) -> None:
     call_id = call.call_id or str(uuid.uuid4())
-    loaded = registry.get(call.name)
-    spec = loaded.spec if loaded is not None else None
+    is_meta = call.name == ENABLE_TOOL_NAME
+    loaded = None if is_meta else registry.get(call.name)
+    spec = ENABLE_SPEC if is_meta else (loaded.spec if loaded is not None else None)
     tier = spec.tier if spec is not None else Tier.T2
+    if is_meta:
+        state.enable_calls += 1
     args = call.args
     await emit(
         ToolCallEvent(
@@ -170,6 +264,24 @@ async def _handle_tool_call(
         )
     )
     ctx = ToolContext(workspace=workspace, run_id=run_id)
+    if loaded is not None and toolset_of(call.name) not in state.enabled:
+        await _complete_call(
+            run_id=run_id,
+            call_id=call_id,
+            tool=call.name,
+            args=args,
+            tier=tier,
+            decision="deny",
+            approved=False,
+            ok=False,
+            output=None,
+            error=TOOLSET_NOT_ENABLED,
+            duration_ms=0,
+            emit=emit,
+            audit=audit,
+            messages=messages,
+        )
+        return
     if call.parse_error:
         await _complete_call(
             run_id=run_id,
@@ -188,9 +300,12 @@ async def _handle_tool_call(
             messages=messages,
         )
         return
-    if loaded is not None:
+    if loaded is not None or is_meta:
         try:
-            registry.validate_args(call.name, args)
+            if is_meta:
+                validate(instance=args, schema=ENABLE_SPEC.input_schema)
+            else:
+                registry.validate_args(call.name, args)
         except ValidationError as exc:
             await _complete_call(
                 run_id=run_id,
@@ -313,7 +428,10 @@ async def _handle_tool_call(
 
     started = time.perf_counter()
     try:
-        output = await registry.run(call.name, args, ctx)
+        if is_meta:
+            output = _enable_toolsets(registry, state, args)
+        else:
+            output = await registry.run(call.name, args, ctx)
         error = None
         ok = True
     except ValidationError as exc:

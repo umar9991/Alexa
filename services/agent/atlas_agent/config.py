@@ -34,6 +34,7 @@ class Settings:
     groq_base_url: str | None = None
     gemini_base_url: str | None = None
     llm_debug: bool = False
+    always_on_toolsets: tuple[str, ...] = ()
 
 
 def env_text(name: str) -> str | None:
@@ -66,8 +67,41 @@ def load_settings() -> Settings:
         gemini_model=gemini_model,
         groq_base_url=env_text("GROQ_BASE_URL"),
         gemini_base_url=env_text("GEMINI_BASE_URL"),
-        llm_debug=_bool_env("ATLAS_LLM_DEBUG", default=False),
+        llm_debug=llm_debug_enabled(),
+        always_on_toolsets=_validated_always_on(),
     )
+
+
+def llm_debug_enabled() -> bool:
+    return _bool_env("ATLAS_LLM_DEBUG", default=False)
+
+
+def parse_toolset_list(raw: str | None) -> tuple[str, ...]:
+    """Comma-separated toolset names. Empty items are ignored; order kept, duplicates dropped."""
+    if raw is None:
+        return ()
+    names = (item.strip().lower() for item in raw.split(","))
+    return tuple(dict.fromkeys(name for name in names if name))
+
+
+def always_on_toolsets_from_env() -> tuple[str, ...]:
+    return parse_toolset_list(env_text("ATLAS_ALWAYS_ON_TOOLSETS"))
+
+
+def _validated_always_on() -> tuple[str, ...]:
+    names = always_on_toolsets_from_env()
+    if not names:
+        return ()
+    from atlas_agent.tools.registry import discover_toolset_names
+
+    known = discover_toolset_names()
+    unknown = [name for name in names if name not in known]
+    if unknown:
+        raise ConfigError(
+            f"ATLAS_ALWAYS_ON_TOOLSETS has unknown toolset(s): {', '.join(unknown)}. "
+            f"Known toolsets: {', '.join(known)}"
+        )
+    return names
 
 
 def ensure_workspace(workspace: Path | None) -> Path | None:

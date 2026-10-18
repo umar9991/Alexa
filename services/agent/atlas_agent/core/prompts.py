@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from atlas_agent.tools.toolsets import ENABLE_TOOL_NAME
+
 SYSTEM_PROMPT = (
     "You are Atlas, a personal desktop agent for one user. "
     "Use tools only when they are needed to complete the request. "
@@ -10,6 +16,20 @@ SYSTEM_PROMPT = (
     "Deleting never destroys data: it moves items to _trash. "
     "Ask before bulk reorganization; if the user rejects an action, do not retry it."
 )
+
+
+
+def build_system_prompt(toolsets: Mapping[str, str]) -> str:
+    """Base prompt plus a compact toolset list generated from the registry."""
+    if not toolsets:
+        return SYSTEM_PROMPT
+    listing = ", ".join(f"{name}: {description}" for name, description in toolsets.items())
+    return (
+        f"{SYSTEM_PROMPT} "
+        f"Toolsets (call {ENABLE_TOOL_NAME} before using their tools): {listing}. "
+        "If no tool is needed, answer in plain text."
+    )
+
 
 FINAL_ANSWER_REQUEST = (
     "Give a short final answer for the user based on the tool results above. "

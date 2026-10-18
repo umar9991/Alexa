@@ -4,7 +4,7 @@ import asyncio
 import os
 import subprocess
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,10 @@ from atlas_agent.tools.registry import ToolRegistry
 # before any test module imports atlas_agent.main (which builds the provider at import).
 # A real shell variable or a developer's .env can then never switch tests to a live LLM.
 os.environ["ATLAS_LLM_PROVIDER"] = "scripted"
+# Toolsets are lazy in production (empty default). Most tests drive tools directly with fake
+# providers, so the suite enables every toolset by default; tests of the lazy behavior pass
+# always_on_toolsets=() explicitly.
+os.environ["ATLAS_ALWAYS_ON_TOOLSETS"] = "demo,docx,fs,lms"
 
 
 class RecordingEmitter:
@@ -94,6 +98,7 @@ async def run_scripted(
     cancel_event: asyncio.Event | None = None,
     run_id: str = "run-1",
     workspace: Path | None = None,
+    always_on_toolsets: Collection[str] | None = None,
 ) -> RecordingEmitter:
     emitter = RecordingEmitter()
     await run_agent(
@@ -109,6 +114,7 @@ async def run_scripted(
         max_steps=max_steps,
         cancel_event=cancel_event,
         workspace=workspace,
+        always_on_toolsets=always_on_toolsets,
     )
     return emitter
 

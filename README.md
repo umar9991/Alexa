@@ -39,6 +39,7 @@ The backend WebSocket (`ws://localhost:8000/ws`) still sends `hello` on connect 
 - Server: `run_started`, `tool_call`, `approval_required`, `tool_result`, `assistant_message`, `run_finished`
 - T2 tools always wait for `approval`. A second `user_message` while a run is active returns `{"type":"error","message":"run already in progress"}`.
 - Audit lines are appended to `data/audit.jsonl` (or `ATLAS_AUDIT_LOG`).
+- Toolsets: a toolset is the part of a tool name before the first dot (`fs`, `docx`, `lms`, `demo`). To keep each LLM request small, a run starts with only the built-in `tools.enable` tool (T0, handled by the loop, audited and traced like any call; it does not use up a step, at most 6 calls per run). The model calls `tools.enable {"toolsets": ["fs"]}` and the next step then includes the full specs of that toolset. A call to a tool whose toolset is not enabled is not executed and is audited as denied. Enabling never changes tiers or approvals: T2 tools still wait for `approval`. `ATLAS_ALWAYS_ON_TOOLSETS` (comma-separated, empty by default, unknown names fail at startup) pre-enables toolsets for every run. With `ATLAS_LLM_DEBUG=1` the log shows `llm step tools_sent=<n> approx_tokens=<chars/4>` per step (counts only).
 
 ```powershell
 python scripts/ws_demo.py "hello"
@@ -47,7 +48,7 @@ python scripts/ws_demo.py "danger delete everything"
 
 ## LLM provider
 
-Copy `.env.example` to `.env`. `ATLAS_LLM_PROVIDER` is required: set it to one name or a comma-separated fallback chain (`groq`, `gemini`, or `groq,gemini`). If it is unset or empty the backend refuses to start and lists the valid values. `scripted` is a test-only provider (it answers every message by calling `demo.echo`) and is never a default; set `ATLAS_LLM_PROVIDER=scripted` explicitly if you want it, for example with `scripts/ws_demo.py`. Model names come from `GROQ_MODEL` / `GEMINI_MODEL`. Missing keys fail only when a run starts.
+Copy `.env.example` to `.env`. `ATLAS_LLM_PROVIDER` is required: set it to one name or a comma-separated fallback chain (`groq`, `gemini`, or `groq,gemini`). If it is unset or empty the backend refuses to start and lists the valid values. `scripted` is a test-only provider (it answers every message by calling `demo.echo`) and is never a default; set `ATLAS_LLM_PROVIDER=scripted` explicitly if you want it, for example with `scripts/ws_demo.py` (the scripted provider calls `demo.echo` straight away, so also set `ATLAS_ALWAYS_ON_TOOLSETS=demo`). Model names come from `GROQ_MODEL` / `GEMINI_MODEL`. Missing keys fail only when a run starts.
 
 At startup the backend logs the resolved chain (for example `LLM chain: groq:openai/gpt-oss-20b, gemini:gemini-3.1-flash-lite`), and `GET /health` returns the same list in its `llm` field (`scripted:test-only` for the scripted provider). Restart the backend after editing `.env`; a real environment variable in the shell overrides `.env`. Set `ATLAS_LLM_DEBUG=1` to log one metadata line per LLM step (provider, model, finish reason, whether text was present, tool-call names; never content, arguments or keys).
 
